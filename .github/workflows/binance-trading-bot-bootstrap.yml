@@ -1,0 +1,59 @@
+name: bootstrap-binance-trading-bot
+on:
+  push:
+    branches:
+      - binance-trading-bot
+    paths:
+      - '.github/workflows/binance-trading-bot-bootstrap.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: binance-trading-bot
+          fetch-depth: 0
+
+      - name: Reconstruct project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/binance-trading-bot.part-*.b64 | base64 -d > /tmp/binance-trading-bot.tar.gz
+          tar -tzf /tmp/binance-trading-bot.tar.gz >/dev/null
+          tar -xzf /tmp/binance-trading-bot.tar.gz -C .
+          test -f binance-trading-bot/package.json
+          test -f binance-trading-bot/src/server/index.ts
+          mkdir -p .github/workflows
+          cp binance-trading-bot/.github/workflows/ci.yml .github/workflows/binance-trading-bot-ci.yml
+          rm -rf binance-trading-bot/.github
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: binance-trading-bot/package-lock.json
+
+      - name: Install dependencies
+        working-directory: binance-trading-bot
+        run: npm install
+
+      - name: Run full checks
+        working-directory: binance-trading-bot
+        run: npm run check
+
+      - name: Commit validated project
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -rf .bootstrap
+          rm -f .github/workflows/binance-trading-bot-bootstrap.yml
+          git add -A
+          git commit -m 'feat: add Binance Futures Command Center'
+          git push origin HEAD:binance-trading-bot
