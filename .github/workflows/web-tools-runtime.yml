@@ -1,0 +1,156 @@
+name: web-tools-runtime
+on:
+  push:
+    branches:
+      - web-tools-runtime
+    paths:
+      - 'runtime-requests/*.json'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Resolve request
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQ="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^runtime-requests/.*\.json$' | tail -n1)"
+          test -n "$REQ"
+          mkdir -p runtime-output
+          cp "$REQ" runtime-output/request.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Python web tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "scrapling[all]==0.4.15" "https://github.com/Panniantong/Agent-Reach/archive/a19a171fa980a0785849596492e0af4db800c82f.zip"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run requested tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOL="$(python -c 'import json; print(json.load(open("runtime-output/request.json"))["tool"])')"
+          if [ "$TOOL" = "scrapling" ]; then
+            python - <<'PY'
+          import json, traceback
+          from scrapling.fetchers import Fetcher
+          req=json.load(open("runtime-output/request.json"))
+          out={"tool":"scrapling","url":req.get("url")}
+          try:
+              page=Fetcher.get(req["url"])
+              selector=req.get("selector")
+              if selector:
+                  nodes=page.css(selector)
+                  out["matches"]=[n.text.strip() for n in nodes[:20]]
+              else:
+                  out["title"]=page.css("title::text").get()
+                  out["text"]=page.get_all_text(strip=True)[:12000]
+              out["ok"]=True
+          except Exception as e:
+              out.update(ok=False,error=str(e),trace=traceback.format_exc()[-4000:])
+          json.dump(out,open("runtime-output/result.json","w"),ensure_ascii=False,indent=2)
+          PY
+          elif [ "$TOOL" = "agent-reach" ]; then
+            python - <<'PY'
+          import json, traceback
+          req=json.load(open("runtime-output/request.json"))
+          out={"tool":"agent-reach","url":req.get("url"),"operation":req.get("operation","web")}
+          try:
+              op=req.get("operation","web")
+              if op=="rss":
+                  import feedparser
+                  feed=feedparser.parse(req["url"])
+                  out["feed_title"]=feed.feed.get("title")
+                  out["entries"]=[{"title":e.get("title"),"link":e.get("link")} for e in feed.entries[:10]]
+              else:
+                  from agent_reach.channels.web import WebChannel
+                  out["text"]=WebChannel().read(req["url"])[:12000]
+              out["ok"]=True
+          except Exception as e:
+              out.update(ok=False,error=str(e),trace=traceback.format_exc()[-4000:])
+          json.dump(out,open("runtime-output/result.json","w"),ensure_ascii=False,indent=2,default=str)
+          PY
+          elif [ "$TOOL" = "patchright-enhanced" ]; then
+            git clone --depth 1 https://github.com/whaleyxbt/patchright-enhanced.git /tmp/patchright-enhanced
+            cd /tmp/patchright-enhanced
+            git fetch --depth 1 origin 877246f8f89c2c5fb40ca6d75ec55c710571dec6
+            git checkout 877246f8f89c2c5fb40ca6d75ec55c710571dec6
+            python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path("src/config/browser.config.ts")
+          s=p.read_text()
+          s=s.replace("//    locale: process.env.BROWSER_LOCALE || 'de-DE',", "locale: process.env.BROWSER_LOCALE || 'en-US',")
+          p.write_text(s)
+          p=Path("src/browser/context-factory.ts")
+          s=p.read_text()
+          pattern=re.compile(r"\n\s*proxy:\s*\{\s*server:\s*proxyConfig\.server,\s*username:\s*proxyConfig\.username,\s*password:\s*proxyConfig\.password,\s*\},", re.S)
+          replacement="""
+              ...(proxyConfig && proxyConfig.server ? { proxy: {
+                server: proxyConfig.server,
+                username: proxyConfig.username,
+                password: proxyConfig.password,
+              }} : {}),"""
+          s2,n=pattern.subn(replacement,s,count=1)
+          if n != 1:
+              raise SystemExit(f"proxy patch target count={n}")
+          p.write_text(s2)
+          PY
+            npm install
+            npm run build
+            cp "$GITHUB_WORKSPACE/runtime-output/request.json" /tmp/request.json
+            cat > /tmp/patchright-runner.cjs <<'JS'
+          const fs = require('fs');
+          const req = JSON.parse(fs.readFileSync('/tmp/request.json','utf8'));
+          const { createBrowserContext } = require('/tmp/patchright-enhanced/dist/src/browser/context-factory.js');
+          const { cleanupTempDir } = require('/tmp/patchright-enhanced/dist/src/utils/file-utils.js');
+          (async () => {
+            const out={tool:'patchright-enhanced',url:req.url};
+            let context=null,tempDir=null;
+            try {
+              const r=await createBrowserContext({
+                headless:true,
+                executablePath:'/usr/bin/google-chrome',
+                locale:'en-US',
+                timezoneId:'Asia/Riyadh'
+              }, {});
+              context=r.context; tempDir=r.tempDir;
+              await r.page.goto(req.url,{waitUntil:'domcontentloaded',timeout:45000});
+              if (req.selector) out.matches=await r.page.locator(req.selector).allTextContents();
+              out.title=await r.page.title();
+              out.url_final=r.page.url();
+              out.ok=true;
+            } catch(e) {
+              out.ok=false; out.error=String(e && e.stack || e);
+            } finally {
+              if (context) await context.close().catch(()=>{});
+              if (tempDir) { try { cleanupTempDir(tempDir); } catch {} }
+              fs.writeFileSync(process.env.GITHUB_WORKSPACE+'/runtime-output/result.json',JSON.stringify(out,null,2));
+            }
+          })();
+          JS
+            node /tmp/patchright-runner.cjs
+          else
+            printf '%s\n' '{"ok":false,"error":"unsupported tool"}' > "$GITHUB_WORKSPACE/runtime-output/result.json"
+            exit 2
+          fi
+          cat "$GITHUB_WORKSPACE/runtime-output/result.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-tool-result-${{ github.run_id }}
+          path: runtime-output
+          retention-days: 7
