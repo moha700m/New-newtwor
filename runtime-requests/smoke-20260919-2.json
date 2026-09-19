@@ -1,0 +1,5 @@
+{
+  "tool": "scrapling",
+  "url": "https://example.com",
+  "selector": "h1"
+}
