@@ -1,0 +1,5 @@
+{
+  "tool": "scrapling",
+  "url": "https://minichat.com",
+  "selector": "title"
+}
