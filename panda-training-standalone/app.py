@@ -3,7 +3,7 @@ from ctypes import wintypes
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk,messagebox
-import cv2,dxcam,numpy as np,vgamepad as vg
+import dxcam,numpy as np,vgamepad as vg
 
 NAME='Panda Training Standalone'; VER='1.0.0'
 DATA=Path(os.getenv('APPDATA',Path.home()))/'PandaTrainingStandalone'; CFG=DATA/'config.json'
@@ -61,23 +61,22 @@ class Vision:
   try:ctypes.windll.user32.SetProcessDPIAware()
   except:pass
   s.cam=dxcam.create(output_color='BGR')
+ def mask(s,fr):
+  b=fr[:,:,0].astype(np.int16);g=fr[:,:,1].astype(np.int16);r=fr[:,:,2].astype(np.int16);p=s.c['preset']
+  if p=='purple':return (r>120)&(b>120)&(g<170)&((r+b-g)>150)
+  if p=='yellow':return (r>170)&(g>150)&(b<140)&((r+g-b)>260)
+  if p=='green':return (g>150)&(g>r*1.08)&(g>b*1.08)
+  return (r>155)&(r>g*1.25)&(r>b*1.25)
  def target(s):
   c=s.c;f=int(cl(c['fov'],30,600));u=ctypes.windll.user32;w,h=u.GetSystemMetrics(0),u.GetSystemMetrics(1);x,y=w//2,h//2;fr=s.cam.grab(region=(max(0,x-f),max(0,y-f),min(w,x+f),min(h,y+f)))
   if fr is None:return 0,0,0,False
-  hsv=cv2.cvtColor(fr,cv2.COLOR_BGR2HSV);mk=np.zeros(hsv.shape[:2],np.uint8)
-  for a,b,d,e,g,k in PRE.get(c['preset'],PRE['red']):mk=cv2.bitwise_or(mk,cv2.inRange(hsv,np.array([a,b,d]),np.array([e,g,k])))
-  q=int(cl(c['kernel'],1,11));q+=q%2==0;ker=np.ones((q,q),np.uint8);mk=cv2.morphologyEx(mk,cv2.MORPH_OPEN,ker);mk=cv2.morphologyEx(mk,cv2.MORPH_CLOSE,ker)
-  best=None;score=None;cx,cy=fr.shape[1]/2,fr.shape[0]/2
-  for co in cv2.findContours(mk,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[-2]:
-   ar=cv2.contourArea(co)
-   if ar<c['min_area'] or ar>c['max_area']:continue
-   X,Y,W,H=cv2.boundingRect(co);tx=X+W/2;ty=Y+H/2+H*c['yoff'];dx,dy=tx-cx,ty-cy;di=math.hypot(dx,dy)
-   if di>f:continue
-   sc=di-min(ar,500)*.015
-   if score is None or sc<score:score=sc;best=(dx,dy,di,ar)
-  if not best:s.sx*=.65;s.sy*=.65;return 0,0,0,False
-  dx,dy,di,ar=best;a=cl(c['smooth'],.01,1);s.sx+=(dx-s.sx)*a;s.sy+=(dy-s.sy)*a;dx=0 if abs(s.sx)<=c['dead'] else s.sx;dy=0 if abs(s.sy)<=c['dead'] else s.sy
-  mx=int(cl(c['max_corr'],100,20000));ox=int(cl(dx/f*32767*c['strength'],-mx,mx));oy=int(cl(-dy/f*32767*c['strength'],-mx,mx));cf=int(cl(max(0,1-di/f)*75+min(1,ar/200)*25,0,100));return (ox,oy,cf,True) if cf>=c['conf'] else (0,0,cf,False)
+  m=s.mask(fr);ys,xs=np.nonzero(m);cnt=len(xs)
+  if cnt<int(c['min_area']):s.sx*=.65;s.sy*=.65;return 0,0,0,False
+  cx,cy=fr.shape[1]/2,fr.shape[0]/2;d2=(xs-cx)**2+(ys-cy)**2;i=int(np.argmin(d2));px,py=xs[i],ys[i];rad=max(8,int(c['kernel'])*4);near=(np.abs(xs-px)<=rad)&(np.abs(ys-py)<=rad);area=int(near.sum())
+  if area<int(c['min_area']) or area>int(c['max_area']):return 0,0,0,False
+  tx=float(xs[near].mean());ty=float(ys[near].mean())+rad*c['yoff'];dx,dy=tx-cx,ty-cy;di=math.hypot(dx,dy)
+  if di>f:return 0,0,0,False
+  a=cl(c['smooth'],.01,1);s.sx+=(dx-s.sx)*a;s.sy+=(dy-s.sy)*a;dx=0 if abs(s.sx)<=c['dead'] else s.sx;dy=0 if abs(s.sy)<=c['dead'] else s.sy;mx=int(cl(c['max_corr'],100,20000));ox=int(cl(dx/f*32767*c['strength'],-mx,mx));oy=int(cl(-dy/f*32767*c['strength'],-mx,mx));cf=int(cl(max(0,1-di/f)*80+min(1,area/80)*20,0,100));return (ox,oy,cf,True) if cf>=c['conf'] else (0,0,cf,False)
 class Run(threading.Thread):
  def __init__(s,c,q):super().__init__(daemon=True);s.c=c;s.q=q;s.stop=threading.Event();s.lock=threading.Lock()
  def upd(s,c):
