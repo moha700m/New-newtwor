@@ -1,0 +1,36 @@
+name: Build Panda Training Standalone
+
+on:
+  pull_request:
+    paths:
+      - 'panda-training-standalone/**'
+      - '.github/workflows/panda-training-standalone.yml'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: panda-training-standalone
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and build
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name PandaTrainingStandalone --collect-all dxcam --collect-all vgamepad --collect-all cv2 app.py
+          $hash = (Get-FileHash -Algorithm SHA256 .\dist\PandaTrainingStandalone.exe).Hash
+          "PandaTrainingStandalone.exe  SHA256=$hash" | Out-File -Encoding ascii .\dist\SHA256.txt
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: PandaTrainingStandalone-Windows
+          path: |
+            panda-training-standalone/dist/PandaTrainingStandalone.exe
+            panda-training-standalone/dist/SHA256.txt
+          if-no-files-found: error
