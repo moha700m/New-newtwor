@@ -1,0 +1,4 @@
+dxcam==0.0.5
+numpy==2.2.6
+vgamepad @ git+https://github.com/yannbouteiller/vgamepad.git@main
+pyinstaller==6.16.0
