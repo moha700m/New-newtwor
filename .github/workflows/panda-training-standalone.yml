@@ -11,6 +11,8 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 12
+    env:
+      VGAMEPAD_SKIP_VIGEMBUS_INSTALL: 'true'
     defaults:
       run:
         working-directory: panda-training-standalone
