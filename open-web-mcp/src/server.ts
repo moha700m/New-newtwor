@@ -46,7 +46,7 @@ export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
     ]);
     const checks = { chromium, search, network, mcp: true };
     const ready = chromium && search.ok && network;
-    app.log.info({ ready, checks }, 'readiness check');
+    console.log(JSON.stringify({ event: 'readiness', ready, checks }));
     reply.code(ready ? 200 : 503);
     return { ready, checks };
   });
