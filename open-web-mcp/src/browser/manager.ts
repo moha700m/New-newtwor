@@ -8,7 +8,7 @@ import type { BrowserSession } from './session.js';
 import { snapshotInteractive } from './snapshot.js';
 
 export class BrowserManager {
-  private browser?: Browser;
+  private browser: Browser | undefined;
   private readonly sessions = new Map<string, BrowserSession>();
   private readonly slots: Semaphore;
   private cleanupTimer?: NodeJS.Timeout;
