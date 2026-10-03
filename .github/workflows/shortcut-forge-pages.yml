@@ -1,0 +1,52 @@
+name: Deploy Shortcut Forge to Pages
+
+on:
+  push:
+    branches: [shortcut-forge-deploy]
+    paths:
+      - 'shortcut-forge/**'
+      - '.github/workflows/shortcut-forge-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: shortcut-forge-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test builder
+        working-directory: shortcut-forge
+        run: node --test tests/*.test.mjs
+
+      - name: Prepare static site
+        run: |
+          mkdir -p _site
+          cp shortcut-forge/public/live.html _site/index.html
+          cp shortcut-forge/public/styles.css _site/styles.css
+          cp shortcut-forge/public/app.js _site/app.js
+          touch _site/.nojekyll
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
