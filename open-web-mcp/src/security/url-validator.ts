@@ -11,7 +11,8 @@ export async function validatePublicUrl(input: string): Promise<ResolvedPublicUr
   try { url = new URL(input); } catch { throw new InvalidUrlError('Malformed URL'); }
   if (!['http:', 'https:'].includes(url.protocol)) throw new InvalidUrlError(`Unsupported protocol: ${url.protocol}`);
   if (url.username || url.password) throw new InvalidUrlError('Credentials in URLs are not allowed');
-  const host = url.hostname.toLowerCase();
+  const hostname = url.hostname.toLowerCase();
+  const host = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
   if (host === 'localhost' || host.endsWith('.localhost')) throw new BlockedAddressError('localhost is blocked');
   if (net.isIP(host)) {
     if (!isPublicIp(host)) throw new BlockedAddressError(`Blocked IP: ${host}`);
