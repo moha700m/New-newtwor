@@ -9,7 +9,12 @@ import { createServices, type Services } from './services.js';
 import { FixedWindowRateLimiter } from './utils/rate-limit.js';
 import { Semaphore } from './utils/concurrency.js';
 
-export interface OpenWebApp { app: ReturnType<typeof createMcpFastifyApp>; config: Config; services: Services; close(): Promise<void>; }
+export interface OpenWebApp {
+  app: ReturnType<typeof createMcpFastifyApp>;
+  config: Config;
+  services: Services;
+  close(): Promise<void>;
+}
 
 export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
   const config = loadConfig(env);
@@ -17,7 +22,10 @@ export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
   const app = createMcpFastifyApp({
     host: config.HOST,
     allowedHosts: config.allowedHosts,
-    logger: { level: config.NODE_ENV === 'development' ? 'debug' : 'info', redact: ['req.headers.authorization','req.headers.cookie'] },
+    logger: {
+      level: config.NODE_ENV === 'development' ? 'debug' : 'info',
+      redact: ['req.headers.authorization', 'req.headers.cookie'],
+    },
     bodyLimit: 1_000_000,
   } as any);
   const limiter = new FixedWindowRateLimiter(config.RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_MS);
@@ -31,11 +39,16 @@ export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
     const [chromium, search, network] = await Promise.all([
       services.browser.checkReady(),
       services.search.health(),
-      services.safeFetcher.fetch('https://example.com/', { method: 'HEAD', maxBytes: 1024, timeoutMs: 5000 }).then(() => true).catch(() => false),
+      services.safeFetcher
+        .fetch('https://example.com/', { method: 'HEAD', maxBytes: 1024, timeoutMs: 5000 })
+        .then(() => true)
+        .catch(() => false),
     ]);
+    const checks = { chromium, search, network, mcp: true };
     const ready = chromium && search.ok && network;
+    app.log.info({ ready, checks }, 'readiness check');
     reply.code(ready ? 200 : 503);
-    return { ready, checks: { chromium, search, network, mcp: true } };
+    return { ready, checks };
   });
 
   app.all('/mcp', async (request, reply) => {
@@ -44,7 +57,9 @@ export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
       const rate = limiter.take(request.ip);
       if (!rate.allowed) {
         reply.header('retry-after', String(Math.ceil((rate.retryAfterMs ?? 1000) / 1000)));
-        return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Too many requests', retryable: true } });
+        return reply
+          .code(429)
+          .send({ error: { code: 'RATE_LIMITED', message: 'Too many requests', retryable: true } });
       }
       return await concurrency.run(() => nodeHandler(request.raw as any, reply.raw as any, request.body));
     } catch (error) {
@@ -55,7 +70,13 @@ export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
   });
 
   return {
-    app, config, services,
-    async close() { await services.browser.shutdown(); await handler.close(); await app.close(); },
+    app,
+    config,
+    services,
+    async close() {
+      await services.browser.shutdown();
+      await handler.close();
+      await app.close();
+    },
   };
 }
