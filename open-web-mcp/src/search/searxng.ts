@@ -29,15 +29,20 @@ export class SearxngProvider implements SearchProvider {
     } finally { clearTimeout(timer); }
   }
   async health() {
-    try {
-      const url = new URL('/healthz', this.baseUrl);
-      const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      if (response.ok) return true;
-    } catch {}
-    try {
-      const url = new URL('/search?q=health&format=json', this.baseUrl);
-      const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      return response.ok;
-    } catch { return false; }
+    // Readiness must reflect whether the SearXNG service itself is reachable,
+    // not whether an upstream search engine is currently rate-limited or showing a CAPTCHA.
+    const candidates = ['/healthz', '/'];
+    for (const path of candidates) {
+      try {
+        const url = new URL(path, this.baseUrl);
+        const response = await fetch(url, {
+          method: 'GET',
+          signal: AbortSignal.timeout(3000),
+          headers: { accept: 'text/html,application/json;q=0.9,*/*;q=0.8' },
+        });
+        if (response.ok) return true;
+      } catch {}
+    }
+    return false;
   }
 }
