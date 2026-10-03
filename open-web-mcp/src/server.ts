@@ -16,6 +16,18 @@ export interface OpenWebApp {
   close(): Promise<void>;
 }
 
+async function checkOutboundNetwork(): Promise<boolean> {
+  try {
+    const response = await fetch('https://example.com/', {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(5000),
+    });
+    return response.status > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
   const config = loadConfig(env);
   const services = createServices(config);
@@ -39,10 +51,7 @@ export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
     const [chromium, search, network] = await Promise.all([
       services.browser.checkReady(),
       services.search.health(),
-      services.safeFetcher
-        .fetch('https://example.com/', { method: 'HEAD', maxBytes: 1024, timeoutMs: 5000 })
-        .then(() => true)
-        .catch(() => false),
+      checkOutboundNetwork(),
     ]);
     const checks = { chromium, search, network, mcp: true };
     const ready = chromium && search.ok && network;
