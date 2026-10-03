@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#090b10" />
+  <title>Shortcut Forge — ابنِ اختصارات iPhone</title>
+  <meta name="description" content="متجر ومصمم اختصارات Apple Shortcuts بواجهة عربية." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="noise"></div>
+  <header class="topbar shell">
+    <a class="brand" href="#store" aria-label="Shortcut Forge">
+      <span class="brand-mark">⌁</span>
+      <span><b>Shortcut Forge</b><small>مصنع اختصارات iPhone</small></span>
+    </a>
+    <nav class="tabs" aria-label="التنقل">
+      <button data-tab="store" class="active">المتجر</button>
+      <button data-tab="builder">المصمم</button>
+      <button data-tab="guide">طريقة العمل</button>
+    </nav>
+    <div class="status" id="signerStatus"><span></span> جاري فحص التوقيع</div>
+  </header>
+  <main>
+    <section id="store" class="view active shell">
+      <div class="hero">
+        <div>
+          <div class="eyebrow">APPLE SHORTCUTS · RTL BUILDER</div>
+          <h1>اختصارات جاهزة،<br><em>وتبني اختصارك بنفسك.</em></h1>
+          <p>واجهة عربية سريعة لعرض اختصارات iCloud وبناء ملفات <code>.shortcut</code> قابلة للتوقيع على macOS.</p>
+          <div class="hero-actions">
+            <button class="btn primary" data-go="builder">ابدأ البناء</button>
+            <button class="btn ghost" id="addCatalogBtn">+ أضف اختصار للمتجر</button>
+          </div>
+        </div>
+        <div class="phone-card" aria-hidden="true">
+          <div class="phone-island"></div>
+          <div class="mini-shortcut"><span>⌁</span><b>افتح يومي</b><small>4 إجراءات</small></div>
+          <div class="mini-shortcut purple"><span>⌖</span><b>موقعي الآن</b><small>3 إجراءات</small></div>
+          <div class="mini-shortcut blue"><span>↗</span><b>روابط سريعة</b><small>2 إجراء</small></div>
+        </div>
+      </div>
+      <div class="section-head">
+        <div><span class="eyebrow">LIBRARY</span><h2>مكتبة الاختصارات</h2></div>
+        <div class="filter-row" id="categoryFilters"></div>
+      </div>
+      <div id="catalogGrid" class="catalog-grid"></div>
+    </section>
+    <section id="builder" class="view shell">
+      <div class="builder-head">
+        <div><span class="eyebrow">VISUAL BUILDER</span><h1>ابنِ الاختصار</h1><p>رتّب الإجراءات، راجع الـ plist، ثم نزّل نسخة غير موقعة أو وقّعها على Mac.</p></div>
+        <div class="name-box"><label for="shortcutName">اسم الاختصار</label><input id="shortcutName" value="اختصاري الجديد" maxlength="80" /></div>
+      </div>
+      <div class="prompt-box">
+        <div class="prompt-icon">✦</div>
+        <div class="prompt-main"><label for="smartPrompt">وصف سريع</label><textarea id="smartPrompt" rows="2" placeholder="مثال: افتح https://openai.com ثم اعرض رسالة تم الفتح"></textarea></div>
+        <button class="btn primary" id="smartBuildBtn">حوّلها لتدفق</button>
+      </div>
+      <p class="muted tiny">المحلل الحالي محلي وقاعدي، وليس نموذج ذكاء اصطناعي. نقطة التكامل مع LLM جاهزة للإضافة لاحقًا.</p>
+      <div class="builder-layout">
+        <aside class="palette panel"><div class="panel-title"><b>الإجراءات</b><span>اسحب الفكرة، واضغط للإضافة</span></div><div id="actionPalette" class="action-palette"></div></aside>
+        <section class="canvas panel"><div class="panel-title"><b>التدفق</b><span id="flowCount">0 إجراء</span></div><div id="flowEmpty" class="empty-state"><span>⌁</span><b>ابدأ بإضافة إجراء</b><small>كل إجراء هنا يتحول إلى WFWorkflowAction في ملف Shortcut.</small></div><div id="flowList" class="flow-list"></div></section>
+        <aside class="export panel">
+          <div class="panel-title"><b>التصدير</b><span>جاهزية الملف</span></div>
+          <div class="readiness"><div><span>البنية</span><b id="structureState">جاهزة</b></div><div><span>التوقيع</span><b id="signState">يفحص…</b></div></div>
+          <button class="btn primary wide" id="signBtn">وقّع ونزّل .shortcut</button>
+          <button class="btn secondary wide" id="downloadBtn">نزّل نسخة غير موقعة</button>
+          <button class="btn ghost wide" id="copyPlistBtn">نسخ XML Plist</button>
+          <details><summary>معاينة plist</summary><pre id="plistPreview"></pre></details>
+          <div class="notice">لن يصبح التثبيت “نقرة واحدة” من ملف مولَّد إلا بعد توقيعه. Apple تتحقق من الاختصار الموقّع عند الاستيراد.</div>
+        </aside>
+      </div>
+    </section>
+    <section id="guide" class="view shell guide">
+      <span class="eyebrow">PIPELINE</span><h1>كيف يصل الاختصار إلى iPhone؟</h1>
+      <div class="steps"><article><i>01</i><b>Build</b><p>المصمم يحول التدفق إلى plist يحتوي <code>WFWorkflowActions</code>.</p></article><article><i>02</i><b>Sign</b><p>على macOS نحوله إلى binary plist ثم نشغّل <code>shortcuts sign --mode anyone</code>.</p></article><article><i>03</i><b>Install</b><p>المستخدم يفتح الملف الموقّع في Shortcuts، أو تنشره لاحقًا كرابط iCloud من تطبيق Shortcuts.</p></article></div>
+      <div class="architecture panel"><pre>Browser Builder
+      │
+      ├── unsigned .shortcut  (works everywhere)
+      │
+      └── POST /api/sign
+                │
+                ▼
+             macOS host
+        plutil → shortcuts sign
+                │
+                ▼
+         signed .shortcut</pre></div>
+    </section>
+  </main>
+  <dialog id="catalogDialog"><form method="dialog" id="catalogForm"><div class="dialog-head"><div><span class="eyebrow">CATALOG</span><h3>إضافة اختصار</h3></div><button value="cancel" class="icon-btn">×</button></div><label>الاسم<input name="title" required maxlength="60" placeholder="مثال: تحميل الفيديو" /></label><label>الوصف<textarea name="description" required rows="3" placeholder="وصف مختصر"></textarea></label><label>التصنيف<select name="category"><option>أدوات</option><option>إنتاجية</option><option>ويب</option><option>موقع</option><option>وسائط</option></select></label><label>رابط iCloud<input name="icloudUrl" type="url" placeholder="https://www.icloud.com/shortcuts/..." /></label><div class="dialog-actions"><button value="cancel" class="btn ghost">إلغاء</button><button value="default" class="btn primary" id="saveCatalogBtn">حفظ</button></div></form></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
