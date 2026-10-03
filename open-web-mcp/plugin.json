@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "open-web",
+  "version": "1.0.0",
+  "description": "Search, read, inspect and interact with public websites using a private web research and browser automation backend.",
+  "license": "MIT",
+  "keywords": ["web", "research", "browser", "mcp", "search"],
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json",
+  "extensions": {
+    "com.openai": {
+      "displayName": "Open Web",
+      "description": "Private web search, page reading, extraction, screenshots and browser automation."
+    }
+  }
+}

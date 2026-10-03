@@ -1,0 +1,55 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_BIND_ADDRESS: 0.0.0.0
+      SEARXNG_PORT: 8080
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-this-before-production}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/search?q=health&format=json', timeout=5)\""]
+      interval: 15s
+      timeout: 7s
+      retries: 10
+      start_period: 20s
+
+  open-web-mcp:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      searxng:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+      HOST: 0.0.0.0
+      MCP_API_KEY: ${MCP_API_KEY:?set MCP_API_KEY}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
+      SEARXNG_URL: http://searxng:8080
+      ENABLE_DDG_FALLBACK: "true"
+      MAX_BROWSER_SESSIONS: ${MAX_BROWSER_SESSIONS:-5}
+      BROWSER_SESSION_TTL: ${BROWSER_SESSION_TTL:-600}
+      BROWSER_IDLE_TTL: ${BROWSER_IDLE_TTL:-300}
+      BROWSER_MEMORY_MB: ${BROWSER_MEMORY_MB:-256}
+      PAGE_TIMEOUT_MS: ${PAGE_TIMEOUT_MS:-30000}
+      MAX_HTML_BYTES: ${MAX_HTML_BYTES:-10000000}
+      MAX_TEXT_CHARS: ${MAX_TEXT_CHARS:-100000}
+      MAX_DOWNLOAD_BYTES: ${MAX_DOWNLOAD_BYTES:-25000000}
+      SEARCH_CACHE_TTL: ${SEARCH_CACHE_TTL:-300}
+      PAGE_CACHE_TTL: ${PAGE_CACHE_TTL:-300}
+      USER_AGENT: ${USER_AGENT:-OpenWebMCP/1.0}
+    ports:
+      - "8787:8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
