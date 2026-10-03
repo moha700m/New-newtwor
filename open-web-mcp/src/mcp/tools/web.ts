@@ -90,7 +90,7 @@ export function registerWebTools(server: McpServer, services: Services, logger: 
     const safeHeaders: Record<string,string> = {};
     for (const [key, value] of Object.entries(headers)) {
       if (blocked.has(key.toLowerCase())) throw new Error(`Header is not allowed: ${key}`);
-      safeHeaders[key] = value;
+      safeHeaders[key] = String(value);
     }
     safeHeaders.accept ??= 'application/json';
     const response = await services.safeFetcher.fetch(url, { method, headers: safeHeaders, maxBytes: services.config.MAX_DOWNLOAD_BYTES });
