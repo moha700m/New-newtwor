@@ -13,8 +13,12 @@ export interface SnapshotElement {
 export async function snapshotInteractive(page: Page, startCounter: number) {
   const result = await page.evaluate(({ startCounter }) => {
     let counter = startCounter;
-    const selectors = ['a[href]','button','input','select','textarea','[role="button"]','[role="link"]'].join(',');
-    const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
+    const selectors = ['a[href]','button','input:not([type="hidden"])','select','textarea','[role="button"]','[role="link"]'].join(',');
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors)).filter((el) => {
+      const style = getComputedStyle(el);
+      const visible = Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      return visible && style.visibility !== 'hidden' && style.display !== 'none';
+    });
     const elements = nodes.slice(0, 500).map((el) => {
       let id = el.getAttribute('data-openweb-id');
       if (!id) {
