@@ -7,7 +7,10 @@ const blockedRanges = new Set([
 export function isPublicIp(input: string): boolean {
   try {
     let addr = ipaddr.parse(input);
-    if (addr.kind() === 'ipv6' && addr.isIPv4MappedAddress()) addr = addr.toIPv4Address();
+    if (addr.kind() === 'ipv6') {
+      const ipv6 = addr as ipaddr.IPv6;
+      if (ipv6.isIPv4MappedAddress()) addr = ipv6.toIPv4Address();
+    }
     return !blockedRanges.has(addr.range());
   } catch {
     return false;
