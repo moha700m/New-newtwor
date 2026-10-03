@@ -27,7 +27,7 @@
     "ipaddr.js": "^2.2.0",
     "linkedom": "^0.18.12",
     "pino": "^9.9.0",
-    "playwright": "^1.63.0",
+    "playwright": "1.63.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
