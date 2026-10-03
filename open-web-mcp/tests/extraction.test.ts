@@ -7,7 +7,8 @@ const html = `<!doctype html><html><head><title>Example</title><meta name="autho
 describe('extraction', () => {
   it('extracts readable content and metadata', () => {
     const result = extractReadable(html, 'https://example.com/page');
-    expect(result.title).toContain('Hello');
+    expect(result.title).toBe('Example');
+    expect(result.content).toContain('Hello');
     expect(result.content).toContain('important');
     expect(result.content).toContain('https://example.com/next');
     expect(result.metadata.author).toBe('Tester');
