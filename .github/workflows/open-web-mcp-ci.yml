@@ -44,6 +44,10 @@ jobs:
 
   docker-and-inspector:
     runs-on: ubuntu-latest
+    env:
+      MCP_API_KEY: ci-open-web-mcp-test-key-2026
+      SEARXNG_SECRET: ci-searxng-secret-2026
+      MCP_ALLOWED_HOSTS: localhost,127.0.0.1
     defaults:
       run:
         working-directory: open-web-mcp
@@ -54,10 +58,6 @@ jobs:
           node-version: 22
       - run: npm install --no-audit --no-fund
       - name: Build and start Compose stack
-        env:
-          MCP_API_KEY: ci-open-web-mcp-test-key-2026
-          SEARXNG_SECRET: ci-searxng-secret-2026
-          MCP_ALLOWED_HOSTS: localhost,127.0.0.1
         run: |
           set -euo pipefail
           docker compose up -d --build
@@ -98,7 +98,6 @@ jobs:
       - name: Full MCP smoke through Docker
         env:
           MCP_BASE_URL: http://127.0.0.1:8787
-          MCP_API_KEY: ci-open-web-mcp-test-key-2026
         run: npm run smoke
       - name: Compose logs on failure
         if: failure()
