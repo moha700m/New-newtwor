@@ -46,7 +46,7 @@ export function buildApp(env: NodeJS.ProcessEnv = process.env): OpenWebApp {
         reply.header('retry-after', String(Math.ceil((rate.retryAfterMs ?? 1000) / 1000)));
         return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Too many requests', retryable: true } });
       }
-      return await concurrency.run(() => nodeHandler(request.raw, reply.raw, request.body));
+      return await concurrency.run(() => nodeHandler(request.raw as any, reply.raw as any, request.body));
     } catch (error) {
       const body = toPublicError(error);
       const code = error instanceof AuthenticationError ? 401 : 500;
