@@ -1,0 +1,31 @@
+name: Validate Shortcut Forge React
+on:
+  push:
+    branches: [shortcut-forge-react]
+    paths:
+      - 'shortcut-forge-v2/**'
+      - '.github/workflows/shortcut-forge-react.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shortcut-forge-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: shortcut-forge-v2/package-lock.json
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Typecheck and build
+        run: npm run build
