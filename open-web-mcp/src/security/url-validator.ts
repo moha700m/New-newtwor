@@ -1,3 +1,4 @@
+import type { LookupAddress } from 'node:dns';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { BlockedAddressError, InvalidUrlError } from '../errors/index.js';
@@ -16,7 +17,7 @@ export async function validatePublicUrl(input: string): Promise<ResolvedPublicUr
     if (!isPublicIp(host)) throw new BlockedAddressError(`Blocked IP: ${host}`);
     return { url, addresses: [host] };
   }
-  let records: dns.LookupAddress[];
+  let records: LookupAddress[];
   try { records = await dns.lookup(host, { all: true, verbatim: true }); }
   catch { throw new InvalidUrlError(`DNS resolution failed for ${host}`); }
   if (records.length === 0) throw new InvalidUrlError(`No DNS addresses for ${host}`);
