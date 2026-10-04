@@ -11,6 +11,8 @@ const schema = z.object({
   MCP_ALLOWED_HOSTS: z.string().default(''),
   PUBLIC_BASE_URL: z.string().url().optional(),
   RAILWAY_PUBLIC_DOMAIN: z.string().optional(),
+  VERCEL_URL: z.string().optional(),
+  VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
   SEARXNG_URL: z.string().url().optional(),
   ENABLE_DDG_FALLBACK: boolish.default(true),
   MAX_BROWSER_SESSIONS: intish(5, 1),
@@ -42,10 +44,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   const allowedHosts = parsed.MCP_ALLOWED_HOSTS.split(',').map((x) => x.trim()).filter(Boolean);
   if (parsed.RAILWAY_PUBLIC_DOMAIN) allowedHosts.push(parsed.RAILWAY_PUBLIC_DOMAIN);
+  if (parsed.VERCEL_URL) allowedHosts.push(parsed.VERCEL_URL);
+  if (parsed.VERCEL_PROJECT_PRODUCTION_URL) allowedHosts.push(parsed.VERCEL_PROJECT_PRODUCTION_URL);
   if (parsed.NODE_ENV !== 'production') allowedHosts.push('localhost', '127.0.0.1', '[::1]');
   if (parsed.NODE_ENV === 'production' && allowedHosts.length === 0) {
-    throw new Error('MCP_ALLOWED_HOSTS or RAILWAY_PUBLIC_DOMAIN is required in production');
+    throw new Error('MCP_ALLOWED_HOSTS, RAILWAY_PUBLIC_DOMAIN, VERCEL_URL, or VERCEL_PROJECT_PRODUCTION_URL is required in production');
   }
-  const publicBaseUrl = parsed.PUBLIC_BASE_URL ?? (parsed.RAILWAY_PUBLIC_DOMAIN ? `https://${parsed.RAILWAY_PUBLIC_DOMAIN}` : `http://localhost:${parsed.PORT}`);
+  const publicBaseUrl = parsed.PUBLIC_BASE_URL
+    ?? (parsed.VERCEL_PROJECT_PRODUCTION_URL ? `https://${parsed.VERCEL_PROJECT_PRODUCTION_URL}` : undefined)
+    ?? (parsed.VERCEL_URL ? `https://${parsed.VERCEL_URL}` : undefined)
+    ?? (parsed.RAILWAY_PUBLIC_DOMAIN ? `https://${parsed.RAILWAY_PUBLIC_DOMAIN}` : undefined)
+    ?? `http://localhost:${parsed.PORT}`;
   return { ...parsed, allowedHosts: [...new Set(allowedHosts)], publicBaseUrl };
 }
