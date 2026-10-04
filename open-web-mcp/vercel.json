@@ -1,0 +1,31 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "mcp": {
+      "runtime": "container",
+      "root": ".",
+      "entrypoint": "Dockerfile.vercel",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "searxng",
+          "format": "url",
+          "env": "SEARXNG_URL"
+        }
+      ]
+    },
+    "searxng": {
+      "runtime": "container",
+      "root": "searxng",
+      "entrypoint": "Dockerfile.vercel"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "mcp"
+      }
+    }
+  ]
+}
