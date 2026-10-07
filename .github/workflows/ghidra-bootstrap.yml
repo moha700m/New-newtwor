@@ -26,11 +26,42 @@ jobs:
           set -euo pipefail
           echo "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db  ghidra_12.1.4_PUBLIC_20260921.zip" | sha256sum -c -
 
-      - name: Upload verified Ghidra package
+      - name: Split package for connector transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          split -b 180M -d -a 2 ghidra_12.1.4_PUBLIC_20260921.zip ghidra.part.
+          ls -lh ghidra.part.*
+          test -f ghidra.part.00
+          test -f ghidra.part.01
+          test -f ghidra.part.02
+          test -f ghidra.part.03
+
+      - name: Upload part 00
         uses: actions/upload-artifact@v4
         with:
-          name: ghidra-12.1.4-official
-          path: ghidra_12.1.4_PUBLIC_20260921.zip
+          name: ghidra-part-00
+          path: ghidra.part.00
           compression-level: 0
           retention-days: 1
-          if-no-files-found: error
+      - name: Upload part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghidra-part-01
+          path: ghidra.part.01
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghidra-part-02
+          path: ghidra.part.02
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghidra-part-03
+          path: ghidra.part.03
+          compression-level: 0
+          retention-days: 1
