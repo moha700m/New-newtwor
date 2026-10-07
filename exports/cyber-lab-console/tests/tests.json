@@ -1,0 +1,68 @@
+[
+  {
+    "name": "تحميل Agent ويندوز بدون اعتماديات خارجية",
+    "sanity": true,
+    "viewport": "desktop",
+    "covers": [
+      "Windows agent download",
+      "one-click launcher",
+      "pairing workflow"
+    ],
+    "description": "يتحقق أن نافذة ربط الجهاز تعرض تنزيل ويندوز المباشر وتعليمات مختصرة.",
+    "steps": [
+      "اضغط ربط جهاز",
+      "تحقق من ظهور خيار تحميل لويندوز",
+      "اضغط تحميل لويندوز"
+    ],
+    "expected": "يبدأ تنزيل ملف cyberlab_agent_windows.bat وتبقى تعليمات التشغيل واضحة."
+  },
+  {
+    "name": "رفض هدف عام من صفحة الفحص",
+    "viewport": "desktop",
+    "covers": [
+      "private-scope validation",
+      "Saudi Arabic localization"
+    ],
+    "description": "يتحقق أن الواجهة العربية ما زالت تمنع فحص عناوين الإنترنت العامة.",
+    "steps": [
+      "افتح فحص",
+      "اختر فحص المنافذ",
+      "اكتب 8.8.8.8",
+      "اضغط تنفيذ الفحص"
+    ],
+    "expected": "تظهر رسالة عربية واضحة بأن العنوان العام غير مسموح."
+  },
+  {
+    "name": "واجهة عربية على الجوال",
+    "viewport": "mobile",
+    "covers": [
+      "RTL layout",
+      "Arabic navigation",
+      "mobile layout"
+    ],
+    "description": "يتحقق أن أهم أقسام الموقع تظهر بالعربي وبشكل مختصر على شاشة الجوال.",
+    "steps": [
+      "افتح الرئيسية",
+      "انتقل إلى الأجهزة",
+      "افتح آبل",
+      "ارجع إلى النتائج"
+    ],
+    "expected": "التنقل العربي واضح ولا يوجد تمرير أفقي مزعج."
+  },
+  {
+    "name": "عرض إدارة آبل بالعربي",
+    "viewport": "desktop",
+    "covers": [
+      "Apple management localization",
+      "MDM command labels",
+      "Companion pairing"
+    ],
+    "description": "يتحقق من تعريب شاشة آبل مع إبقاء أوامر MDM التقنية تعمل داخليًا.",
+    "steps": [
+      "افتح آبل",
+      "راجع قسم ربط الآيفون",
+      "راجع قسم إدارة MDM"
+    ],
+    "expected": "تظهر النصوص والعناوين بالعربي وأسماء الأوامر للمستخدم مترجمة."
+  }
+]
