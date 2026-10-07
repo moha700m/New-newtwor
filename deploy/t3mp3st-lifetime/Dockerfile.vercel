@@ -83,6 +83,53 @@ for (const entry of files) {
   }
 }
 
+async function resolveOpenAIModel() {
+  const preferred = process.env.T3MP3ST_OPENAI_MODEL?.trim() || 'gpt-6.1-sol';
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) return preferred;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) {
+      console.warn('[T3MP3ST-OPENAI] credential probe failed with status', response.status);
+      return preferred;
+    }
+    const body = await response.json();
+    const available = new Set(Array.isArray(body?.data) ? body.data.map(item => item?.id).filter(Boolean) : []);
+    const candidates = [preferred, 'gpt-6-luna', 'gpt-4.1-mini', 'gpt-4o-mini'];
+    const selected = candidates.find(id => available.has(id)) || preferred;
+    console.log('[T3MP3ST-OPENAI] credential accepted; model selected:', selected);
+    return selected;
+  } catch (error) {
+    console.warn('[T3MP3ST-OPENAI] model probe unavailable:', String(error?.message || error));
+    return preferred;
+  }
+}
+
+async function enforceRuntimeConfig() {
+  const configPath = join(configDir, 'config.json');
+  let current = {};
+  try {
+    current = JSON.parse(await readFile(configPath, 'utf8'));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.warn('[T3MP3ST-OPENAI] config parse fallback:', String(error?.message || error));
+  }
+
+  const selectedModel = await resolveOpenAIModel();
+  current.defaultProvider = 'openai';
+  current.defaultModel = selectedModel;
+  current.openai = {
+    ...(current.openai || {}),
+    baseUrl: 'https://api.openai.com/v1',
+    defaultModel: selectedModel,
+  };
+  await writeFile(configPath, JSON.stringify(current, null, 2));
+}
+
+await enforceRuntimeConfig();
+
 const previousMeta = await readMeta();
 const bootCount = Number(previousMeta.bootCount || 0) + 1;
 await put(`${prefix}/meta/runtime.json`, JSON.stringify({
