@@ -1,0 +1,166 @@
+FROM node:22-alpine
+RUN apk add --no-cache bash curl git openssl ca-certificates file bind-tools nmap
+WORKDIR /app
+RUN git clone https://github.com/elder-plinius/T3MP3ST . && git checkout 29824d5625ede419ac8cdae418c8f4c72c6270f7
+RUN npm ci && npm install --no-save @vercel/blob@2.6.1 && npm run build
+RUN cat > /app/vercel-blob-state.mjs <<'EOF'
+import { get, put } from '@vercel/blob';
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { spawn } from 'node:child_process';
+
+const token = process.env.BLOB_READ_WRITE_TOKEN;
+if (!token) {
+  console.error('[T3MP3ST-PERSIST] BLOB_READ_WRITE_TOKEN is missing');
+  process.exit(1);
+}
+
+const stateDir = process.env.T3MP3ST_STATE_DIR || '/tmp/t3mp3st-state';
+const configDir = process.env.T3MP3ST_CONFIG_DIR || '/tmp/t3mp3st-config';
+const prefix = 't3mp3st-runtime/v1';
+
+await mkdir(stateDir, { recursive: true });
+await mkdir(configDir, { recursive: true });
+
+const files = [
+  { local: join(stateDir, 'state.json'), remote: `${prefix}/state/state.json` },
+  { local: join(stateDir, 'events.jsonl'), remote: `${prefix}/state/events.jsonl` },
+  { local: join(configDir, 'config.json'), remote: `${prefix}/config/config.json` },
+  { local: join(configDir, '.env'), remote: `${prefix}/config/.env` },
+];
+
+async function blobGet(pathname) {
+  try {
+    return await get(pathname, { access: 'private', useCache: false, token });
+  } catch (error) {
+    const msg = String(error?.message || error);
+    if (/404|not found|does not exist/i.test(msg)) return null;
+    throw error;
+  }
+}
+
+async function restoreOne(entry) {
+  const result = await blobGet(entry.remote);
+  if (!result) return false;
+  const bytes = Buffer.from(await new Response(result.stream).arrayBuffer());
+  await mkdir(dirname(entry.local), { recursive: true });
+  await writeFile(entry.local, bytes);
+  return true;
+}
+
+async function uploadOne(entry) {
+  try {
+    const bytes = await readFile(entry.local);
+    await put(entry.remote, bytes, {
+      access: 'private',
+      allowOverwrite: true,
+      token,
+      contentType: entry.remote.endsWith('.json') ? 'application/json' : 'text/plain',
+    });
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function readMeta() {
+  const result = await blobGet(`${prefix}/meta/runtime.json`);
+  if (!result) return { bootCount: 0 };
+  try {
+    return JSON.parse(Buffer.from(await new Response(result.stream).arrayBuffer()).toString('utf8'));
+  } catch {
+    return { bootCount: 0 };
+  }
+}
+
+const restored = [];
+for (const entry of files) {
+  try {
+    if (await restoreOne(entry)) restored.push(entry.remote);
+  } catch (error) {
+    console.warn('[T3MP3ST-PERSIST] restore failed', entry.remote, String(error?.message || error));
+  }
+}
+
+const previousMeta = await readMeta();
+const bootCount = Number(previousMeta.bootCount || 0) + 1;
+await put(`${prefix}/meta/runtime.json`, JSON.stringify({
+  bootCount,
+  lastBootAt: new Date().toISOString(),
+  restored,
+  deploymentId: process.env.VERCEL_DEPLOYMENT_ID || null,
+}), {
+  access: 'private',
+  allowOverwrite: true,
+  token,
+  contentType: 'application/json',
+});
+console.log(`[T3MP3ST-PERSIST] durable blob ready; boot=${bootCount}; restored=${restored.length}`);
+
+const signatures = new Map();
+async function signature(path) {
+  try {
+    const s = await stat(path);
+    return `${s.size}:${s.mtimeMs}`;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 'missing';
+    throw error;
+  }
+}
+
+async function syncChanged(force = false) {
+  for (const entry of files) {
+    try {
+      const sig = await signature(entry.local);
+      if (sig === 'missing') continue;
+      if (!force && signatures.get(entry.local) === sig) continue;
+      if (await uploadOne(entry)) {
+        signatures.set(entry.local, sig);
+        console.log('[T3MP3ST-PERSIST] synced', entry.remote);
+      }
+    } catch (error) {
+      console.warn('[T3MP3ST-PERSIST] sync failed', entry.remote, String(error?.message || error));
+    }
+  }
+}
+
+await syncChanged(true);
+
+const child = spawn('npm', ['run', 'server:prod'], {
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    T3MP3ST_PORT: process.env.PORT || process.env.T3MP3ST_PORT || '3000',
+    T3MP3ST_HOST: process.env.T3MP3ST_HOST || '0.0.0.0',
+    T3MP3ST_STATE_DIR: stateDir,
+    T3MP3ST_CONFIG_DIR: configDir,
+  },
+});
+
+const timer = setInterval(() => void syncChanged(false), 5000);
+timer.unref();
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearInterval(timer);
+  console.log('[T3MP3ST-PERSIST] shutdown flush');
+  await syncChanged(true);
+  child.kill(signal);
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+
+child.on('exit', async (code, signal) => {
+  clearInterval(timer);
+  if (!shuttingDown) await syncChanged(true);
+  console.log('[T3MP3ST-PERSIST] server exited', { code, signal });
+  process.exit(code ?? 0);
+});
+EOF
+ENV DOCKER=true
+EXPOSE 3000
+CMD ["node","/app/vercel-blob-state.mjs"]
