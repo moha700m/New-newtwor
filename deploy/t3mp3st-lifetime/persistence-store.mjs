@@ -552,11 +552,25 @@ export class SnapshotPersistence {
   get leaseExpiresAt() { return this.manifest?.writer?.leaseExpiresAt ?? null; }
 }
 
-export function createBlobAdapter({ get, put, token, timeoutMs = 10_000, fetchImpl = fetch }) {
+export function createBlobAdapter({ get, head, put, token, timeoutMs = 10_000, fetchImpl = fetch }) {
   return {
     async get(pathname) {
       let result;
+      let before;
+      const mutable = pathname.endsWith('/v2/manifest.json');
+      const metadata = async () => {
+        if (typeof head !== 'function') throw new PersistenceError('manifest_metadata_unavailable');
+        const value = await head(pathname, { token, abortSignal: AbortSignal.timeout(timeoutMs) });
+        if (typeof value?.etag !== 'string' || !value.etag || !Number.isSafeInteger(value.size) || value.size < 0 || value.size > MAX_SNAPSHOT_BYTES) {
+          throw new PersistenceError('invalid_manifest_metadata');
+        }
+        return value;
+      };
       try {
+        // The download endpoint's HTTP ETag is not the conditional-write API's
+        // version identifier. Bracket an uncached origin read with API metadata
+        // so bytes and the CAS version belong to the same stable object.
+        if (mutable) before = await metadata();
         result = await get(pathname, {
           access: 'private',
           useCache: false,
@@ -564,10 +578,16 @@ export function createBlobAdapter({ get, put, token, timeoutMs = 10_000, fetchIm
           abortSignal: AbortSignal.timeout(timeoutMs),
         });
       } catch (error) {
-        if (isTypedMissingBlobError(error)) return null;
+        if (isTypedMissingBlobError(error)) {
+          if (before) { const changed = new PersistenceError('manifest_changed_during_read'); changed.status = 503; throw changed; }
+          return null;
+        }
         throw error;
       }
-      if (!result) return null;
+      if (!result) {
+        if (before) { const error = new PersistenceError('manifest_changed_during_read'); error.status = 503; throw error; }
+        return null;
+      }
       if (!result.stream) throw new PersistenceError('invalid_blob_stream');
       const chunks = [];
       let size = 0;
@@ -581,6 +601,20 @@ export function createBlobAdapter({ get, put, token, timeoutMs = 10_000, fetchIm
         chunks.push(buffer);
       }
       const bytes = Buffer.concat(chunks, size);
+      if (mutable) {
+        let after;
+        try { after = await metadata(); }
+        catch (error) {
+          if (!isTypedMissingBlobError(error)) throw error;
+          const changed = new PersistenceError('manifest_changed_during_read'); changed.status = 503; throw changed;
+        }
+        if (before.etag !== after.etag || before.size !== after.size || bytes.length !== after.size) {
+          const error = new PersistenceError('manifest_changed_during_read');
+          error.status = 503; // bounded outer storage retry, never unconditional overwrite
+          throw error;
+        }
+        return { bytes, etag: after.etag, url: result.blob?.url || '' };
+      }
       return { bytes, etag: result.blob?.etag || '', url: result.blob?.url || '' };
     },
     async put(pathname, bytes, options = {}) {

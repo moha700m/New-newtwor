@@ -66,7 +66,7 @@ timeout, and token controls are enforced from the production configuration.
 The default namespace is `t3mp3st-runtime/v2`: content-addressed immutable
 snapshots plus a manifest committed with an ETag conditional write. The manifest
 contains schema version, revision, snapshot hashes, timestamps, and deployment/
-boot writer identity. Private reads bypass the CDN cache. Startup also verifies
+boot writer identity. Private reads bypass the CDN cache. Mutable manifest reads are bracketed by stable Blob API metadata so conditional writes use the API version, rather than the download endpoint HTTP ETag. Startup also verifies
 that a snapshot cannot be fetched without authentication.
 
 The old `t3mp3st-runtime/v1` files are a read-only migration source. They remain

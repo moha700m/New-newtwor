@@ -230,7 +230,7 @@ export async function runSupervisor({ environment = process.env, fetchImpl = fet
     await rm(join(appConfigDir, '.env'), { force: true });
 
     const sdk = blobSdk || await import('@vercel/blob');
-    const adapter = createBlobAdapter({ get: sdk.get, put: sdk.put, token, timeoutMs: 10_000, fetchImpl });
+    const adapter = createBlobAdapter({ get: sdk.get, head: sdk.head, put: sdk.put, token, timeoutMs: 10_000, fetchImpl });
     const fileMap = buildSnapshotFileMap(stateDir, appConfigDir);
     let persistence;
     persistence = new SnapshotPersistence({

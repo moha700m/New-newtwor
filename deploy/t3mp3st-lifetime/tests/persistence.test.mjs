@@ -149,6 +149,11 @@ function readManifest(store, prefix = 'test-runtime') {
 function fakeBlobSdk(objects) {
   let etagIndex = 0;
   return {
+    async head(key) {
+      const item = objects.get(key);
+      if (!item) { const error = new Error('missing'); error.name = 'BlobNotFoundError'; throw error; }
+      return { etag: item.etag, size: item.bytes.length };
+    },
     async get(key) {
       const item = objects.get(key);
       return item ? { blob: { etag: item.etag, url: item.url }, stream: new Response(item.bytes).body } : null;
@@ -677,6 +682,38 @@ test('generated config and child environment contain only bounded OpenAI runtime
   for (const key of ['BLOB_READ_WRITE_TOKEN', 'VERCEL_OIDC_TOKEN', 'VERCEL_DEPLOYMENT_ID', 'GITHUB_TOKEN']) assert.equal(env[key], undefined);
   assert.equal(writerEpochFromEnvironment({}), 0);
   assert.throws(() => writerEpochFromEnvironment({ T3MP3ST_WRITER_EPOCH: '-1' }), /invalid_writer_epoch/);
+});
+
+test('mutable manifest uses stable API metadata for CAS even when download HTTP ETag differs', async () => {
+  let heads = 0;
+  let conditionalVersion;
+  const adapter = createBlobAdapter({
+    token: 'test-token',
+    head: async () => { heads++; return { etag: 'api-version', size: 2 }; },
+    get: async () => ({ blob: { etag: 'download-version' }, stream: new Response('{}').body }),
+    put: async (_key, _bytes, options) => { conditionalVersion = options.ifMatch; return { etag: 'next-api-version' }; },
+  });
+  const read = await adapter.get('test/v2/manifest.json');
+  assert.equal(heads, 2);
+  assert.equal(read.etag, 'api-version');
+  await adapter.put('test/v2/manifest.json', read.bytes, { ifMatch: read.etag });
+  assert.equal(conditionalVersion, 'api-version');
+});
+
+test('manifest changed during uncached origin read is retried rather than paired with a newer CAS version', async () => {
+  let heads = 0;
+  const adapter = createBlobAdapter({
+    head: async () => ({ etag: `version-${++heads}`, size: 2 }),
+    get: async () => ({ blob: { etag: 'download-version' }, stream: new Response('{}').body }),
+    put: async () => { throw new Error('must not write'); },
+  });
+  await assert.rejects(adapter.get('test/v2/manifest.json'), error => error.category === 'manifest_changed_during_read' && isTransientStorageError(error));
+  const unavailable = createBlobAdapter({ get: async () => null, put: async () => {} });
+  await assert.rejects(unavailable.get('test/v2/manifest.json'), /manifest_metadata_unavailable/);
+  for (const get of [async () => null, async () => { const error = new Error('missing'); error.name = 'BlobNotFoundError'; throw error; }]) {
+    const missing = createBlobAdapter({ head: async () => ({ etag: 'present', size: 2 }), get, put: async () => {} });
+    await assert.rejects(missing.get('test/v2/manifest.json'), error => error.category === 'manifest_changed_during_read' && isTransientStorageError(error));
+  }
 });
 
 test('private Blob SDK adapter uses uncached authenticated reads and checks returned URLs without auth', async () => {

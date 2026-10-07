@@ -19,7 +19,7 @@
     "frontierSelfTest": "19/19"
   },
   "runtimeTests": {
-    "passed": 34,
+    "passed": 36,
     "skipped": 0,
     "includesActualHTTP": true,
     "signals": [
