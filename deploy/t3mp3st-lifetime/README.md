@@ -38,7 +38,13 @@ Private Blob reads use `useCache: false` so overwritten agent-memory/state files
 
 ## OpenAI
 
-OpenAI is intentionally **manual**. Add `OPENAI_API_KEY` to Vercel only when desired. Do not commit API keys to this repository.
+Production uses OpenAI through Vercel secrets:
+
+- `OPENAI_API_KEY` — sensitive production secret; never commit its value.
+- `TEMPEST_DEFAULT_PROVIDER=openai`
+- `T3MP3ST_OPENAI_MODEL=gpt-6.1-sol`
+
+At container startup the wrapper validates the credential against the OpenAI model listing endpoint and confirms the preferred model is available. If the preferred model is unavailable, it can fall back to a compatible model without exposing the key.
 
 ## Security
 
