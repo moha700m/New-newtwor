@@ -12,14 +12,14 @@
     "existingWarnings": 164
   },
   "upstreamTests": {
-    "files": 92,
-    "passed": 1003,
+    "files": 93,
+    "passed": 1022,
     "opsPreflight": "passed",
     "modelMatrix": "passed",
     "frontierSelfTest": "19/19"
   },
   "runtimeTests": {
-    "passed": 32,
+    "passed": 34,
     "skipped": 0,
     "includesActualHTTP": true,
     "signals": [
@@ -48,5 +48,7 @@
     "baselineHistoryCommits": 17,
     "baselineHistoryFindings": 0
   },
-  "containerBuildAndProductionVerification": "Performed by staged Vercel releases; see PRODUCTION-AUDIT.md for actual evidence."
+  "containerBuildAndProductionVerification": "Performed by staged Vercel releases; see PRODUCTION-AUDIT.md for actual evidence.",
+  "responsesTests": 18,
+  "retainedPatchVerified": true
 }

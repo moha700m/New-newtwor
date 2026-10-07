@@ -52,7 +52,7 @@ available. Fallback is disabled unless the operator explicitly sets both
 
 `T3MP3ST_RUN_SMOKE=true` performs one bounded request through the actual
 application's `/api/llm/chat`, requesting the exact marker `T3MP3ST_OK` with
-32 maximum output tokens. Runtime status reports only success/status/model.
+1024 maximum output tokens including reasoning, using low reasoning effort. GPT-6 uses the official Responses endpoint with stateless encrypted reasoning for tool rounds. Runtime status reports only success/status/model.
 
 ## Persistent state
 
@@ -131,3 +131,5 @@ remain intact; any future retention cleanup must preserve rollback revisions.
 `/api/runtime/status` exposes only sanitized readiness, version, persistence,
 canary, and inference evidence. See `PRODUCTION-AUDIT.md` for the latest actual
 release results and deployment IDs; a successful build alone is not acceptance.
+
+Vercel builds OCI images and ignores the Docker HEALTHCHECK instruction. The supervisor checks HTTP startup readiness, and /api/health and /api/preflight report actual inference and durable-state readiness. Ongoing platform health monitoring is not assumed.

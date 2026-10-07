@@ -29,7 +29,7 @@ async function fixture() {
   const configDir = join(root, 'config');
   await Promise.all([mkdir(stateDir), mkdir(configDir)]);
   const statusPath = join(stateDir, 'runtime-status.json');
-  await writeFile(statusPath, JSON.stringify({ ready: true, readOnly: false }));
+  await writeFile(statusPath, JSON.stringify({ ready: true, readOnly: false, llm: { ready: true, smoke: { enabled: true, complete: true, ok: true } } }));
   const fields = ['missionDrafts', 'improvementProposals', 'approvalRequests', 'evidenceLedger', 'findingsLedger', 'retestLedger', 'hypothesisLedger', 'workOrderLedger', 'watchCycleLedger', 'memoryCapsule', 'memoryProposals'];
   await writeFile(join(stateDir, 'state.json'), JSON.stringify({
     schema_version: 't3mp3st_state/v1',
@@ -106,7 +106,7 @@ test('actual hosted HTTP rejects unsafe requests and both signals flush pending 
       await writeFile(item.statusPath, JSON.stringify({ ready: true, readOnly: true }));
       assert.equal((await request(item, '/api/memory/proposals', { method: 'POST', value: { type: 'open_question', content: 'Must not mutate read-only state' } })).status, 503);
       assert.equal((await request(item, '/api/runtime/status')).status, 503);
-      await writeFile(item.statusPath, JSON.stringify({ ready: true, readOnly: false }));
+      await writeFile(item.statusPath, JSON.stringify({ ready: true, readOnly: false, llm: { ready: true, smoke: { enabled: true, complete: true, ok: true } } }));
       const marker = 'HTTP shutdown durability ' + signal;
       const created = await request(item, '/api/memory/proposals', { method: 'POST', value: { type: 'open_question', content: marker } });
       assert.equal(created.status, 201);
@@ -148,3 +148,37 @@ async function closeAfterNaturalExit(child) {
   const timer = setTimeout(() => child.kill('SIGKILL'), 20000);
   try { return await once(child, 'close'); } finally { clearTimeout(timer); }
 }
+
+test('health and preflight reflect real inference while bootstrap and durable writes stay available', { skip: !appAvailable, timeout: 30000 }, async () => {
+  const item = await fixture();
+  const child = launch(item);
+  try {
+    await ready(item, child);
+    for (const complete of [false, true]) {
+      await writeFile(item.statusPath, JSON.stringify({ ready: true, readOnly: false,
+        llm: { ready: complete ? false : true, smoke: { enabled: true, complete, ok: false } } }));
+      const health = await request(item, '/api/health');
+      assert.equal(health.status, 503);
+      const body = await health.json();
+      assert.equal(body.ok, false);
+      assert.equal(body.llm.connected, false);
+      assert.equal((await request(item, '/api/llm/status')).status, 200);
+      assert.equal((await request(item, '/api/runtime/status')).status, 503);
+      const preflight = await (await request(item, '/api/preflight')).json();
+      assert.equal(preflight.ok, false);
+      assert.ok(preflight.score < 100);
+      assert.equal(preflight.checks.find(row => row.id === 'llm').status, 'block');
+    }
+    const proposal = await request(item, '/api/memory/proposals', { method: 'POST', value: {
+      type: 'open_question', content: 'Durable writes remain possible during inference verification' } });
+    assert.equal(proposal.status, 201);
+    await writeFile(item.statusPath, JSON.stringify({ ready: true, readOnly: false,
+      llm: { ready: true, smoke: { enabled: true, complete: true, ok: true } } }));
+    assert.equal((await request(item, '/api/health')).status, 200);
+    assert.equal((await (await request(item, '/api/health')).json()).ok, true);
+    await close(child, 'SIGTERM');
+  } finally {
+    if (child.exitCode === null && !child.signalCode) child.kill('SIGKILL');
+    await rm(item.root, { recursive: true, force: true });
+  }
+});

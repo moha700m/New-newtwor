@@ -107,6 +107,7 @@ export function setPersistenceStatus(status, update) {
     revision: status.revision,
     leaseExpiresAt: status.leaseExpiresAt,
     lastSyncAt: status.lastSyncAt,
+    claim: update.claim ?? status.persistence.claim ?? null,
   };
 }
 

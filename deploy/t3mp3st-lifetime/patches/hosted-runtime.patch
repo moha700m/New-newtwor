@@ -1,3 +1,1032 @@
+diff --git a/src/arsenal/index.ts b/src/arsenal/index.ts
+index dec82e4..34a3346 100755
+--- a/src/arsenal/index.ts
++++ b/src/arsenal/index.ts
+@@ -23,6 +23,7 @@ import { jsAnalyzeTool } from './js-analyze.js';
+ import { kevCheckTool } from './kev.js';
+ import { binarySinkScanTool } from './binary.js';
+ import { r2AnalyzeTool } from './r2-analyze.js';
++import { hostedMode, hostedChildEnvironment } from '../hosted-policy.js';
+ 
+ const execFileAsync = promisify(execFile);
+ import type {
+@@ -3380,6 +3381,7 @@ export async function runSubprocess(
+     const { stdout, stderr } = await execFileAsync(command, args, {
+       timeout,
+       maxBuffer: maxOutput,
++      ...(hostedMode() ? { env: hostedChildEnvironment() } : {}),
+     });
+     return { stdout, stderr, exitCode: 0 };
+   } catch (error: unknown) {
+diff --git a/src/config/index.ts b/src/config/index.ts
+index ab7cdb4..ca26d62 100755
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -7,6 +7,7 @@
+ 
+ import Conf from 'conf';
+ import { homedir } from 'os';
++import { hostedMode } from '../hosted-policy.js';
+ import { isAbsolute, join } from 'path';
+ import { existsSync, readFileSync, writeFileSync } from 'fs';
+ import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
+@@ -756,7 +757,7 @@ class ConfigManager {
+     // Load only T3MP3ST-owned/home env files. Do NOT read process.cwd()/.env:
+     // operators often run T3MP3ST inside target repos, and importing that repo's
+     // secrets would contaminate this process with unrelated credentials.
+-    const envPaths = this.configDirectory ? [join(this.configDirectory, '.env')] : [
++    const envPaths = hostedMode() ? [] : this.configDirectory ? [join(this.configDirectory, '.env')] : [
+       join(homedir(), '.t3mp3st', '.env'),
+       join(homedir(), '.env'),
+     ];
+@@ -829,6 +830,7 @@ class ConfigManager {
+    * Set an API key for a provider
+    */
+   setApiKey(provider: ApiKeyProvider, key: string): void {
++    if (hostedMode()) throw new Error('Hosted mode accepts provider credentials only through server environment variables');
+     const apiKeys = this.config.get('apiKeys');
+     apiKeys[provider] = key;
+     this.config.set('apiKeys', apiKeys);
+@@ -839,6 +841,7 @@ class ConfigManager {
+    * the saved value; returns '' when egress should leave from the operator's own IP.
+    */
+   getProxyUrl(): string {
++    if (hostedMode()) return '';
+     const env = process.env.TEMPEST_PROXY_URL?.trim();
+     if (env) return env;
+     return (this.config.get('proxyUrl') || '').trim();
+@@ -846,6 +849,7 @@ class ConfigManager {
+ 
+   /** Persist the proxy URL (pass '' to clear). Does NOT install it — see net/proxy. */
+   setProxyUrl(url: string): void {
++    if (hostedMode()) throw new Error('Outbound proxy configuration is unavailable in hosted mode');
+     this.config.set('proxyUrl', (url || '').trim());
+   }
+ 
+@@ -894,6 +898,9 @@ class ConfigManager {
+     const envKey = process.env[envVarMap[provider]];
+     if (envKey) return envKey;   // a non-empty env var wins; empty/unset falls through
+ 
++    // Hosted deployments never lend keys from a developer's persisted config store.
++    if (hostedMode()) return undefined;
++
+     // Otherwise fall back to the stored config
+     return this.config.get('apiKeys')[provider];
+   }
+@@ -958,6 +965,11 @@ class ConfigManager {
+   getLLMConfig(provider?: LLMProvider, model?: string): LLMConfig {
+     let actualProvider = provider;
+ 
++    if (hostedMode()) {
++      if (provider && provider !== 'openai') throw new Error('Hosted mode supports only the OpenAI provider');
++      actualProvider = 'openai';
++    }
++
+     if (!actualProvider) {
+       const envProvider = process.env.TEMPEST_DEFAULT_PROVIDER?.trim();
+       if (envProvider) {
+@@ -1073,7 +1085,7 @@ class ConfigManager {
+       // Local inference is far slower than cloud APIs, so it must not inherit the cloud-tuned
+       // default timeout: floor it at 120s (matching the frontend llmTimeoutFor) and let the
+       // operator override via TEMPEST_LOCAL_TIMEOUT for very slow reasoning models.
+-      timeout: actualProvider === 'local'
++      timeout: hostedMode() ? Math.min(Number(this.config.get('timeout')) || 30000, 30000) : actualProvider === 'local'
+         ? ((): number => {
+             const parsed = Number(process.env.TEMPEST_LOCAL_TIMEOUT);
+             return Number.isFinite(parsed) && parsed > 0
+@@ -1081,7 +1093,7 @@ class ConfigManager {
+               : Math.max(Number(this.config.get('timeout')) || 0, 120000);
+           })()
+         : this.config.get('timeout'),
+-      fallbackChain: this.buildFallbackChain(actualProvider),
++      fallbackChain: hostedMode() ? [] : this.buildFallbackChain(actualProvider),
+     };
+   }
+ 
+diff --git a/src/config/provider-models.ts b/src/config/provider-models.ts
+index 0d94597..05d701f 100644
+--- a/src/config/provider-models.ts
++++ b/src/config/provider-models.ts
+@@ -14,7 +14,7 @@ export interface ProviderModel {
+ 
+ type FetchLike = (
+   url: string,
+-  init?: { headers?: Record<string, string>; signal?: AbortSignal },
++  init?: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: 'error' | 'follow' | 'manual' },
+ ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+ 
+ const ANTHROPIC_VERSION = '2023-06-01';
+@@ -97,7 +97,7 @@ export async function listProviderModels(
+   }
+ 
+   const signal = timeoutSignal(opts.timeoutMs ?? DEFAULT_MODEL_LIST_TIMEOUT_MS);
+-  const res = await doFetch(url, { headers, signal });
++  const res = await doFetch(url, { headers, signal, redirect: 'error' });
+   if (!res.ok) throw new Error(`model-list request failed: HTTP ${res.status}`);
+   return parseModelList(await res.json());
+ }
+diff --git a/src/llm/index.ts b/src/llm/index.ts
+index 518c2cb..11bc9ff 100755
+--- a/src/llm/index.ts
++++ b/src/llm/index.ts
+@@ -20,9 +20,11 @@ import { tmpdir } from 'os';
+ import { join } from 'path';
+ import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
+ import { config } from '../config/index.js';
++import { HOSTED_OPENAI_BASE_URL, hostedMode } from '../hosted-policy.js';
+ import { localAgentChat } from '../agent/local-agents.js';
+ import { fetchBypassingProxy } from '../net/proxy.js';
+ import { enforceToolCallBoundary } from './tool-call-boundary.js';
++import { OpenAIResponsesContinuationCache, OpenAIResponsesPayloadError } from './openai-responses.js';
+ 
+ // =============================================================================
+ // LLM EVENTS
+@@ -62,7 +64,7 @@ export interface ChatOptions {
+   systemPrompt?: string;
+   /** Tool definitions for function calling */
+   tools?: LLMToolDefinition[];
+-  /** External cancellation — honored by adapters whose backend supports mid-flight abort (currently LocalAdapter). */
++  /** External cancellation; hosted requests combine this with a total request deadline. */
+   signal?: AbortSignal;
+ }
+ 
+@@ -72,12 +74,16 @@ export interface ChatOptions {
+ export class LLMApiError extends Error {
+   status: number;
+   retryAfterMs?: number;
++  upstreamCode?: string;
++  upstreamParam?: string;
+ 
+-  constructor(message: string, status: number, retryAfterMs?: number) {
++  constructor(message: string, status: number, retryAfterMs?: number, upstreamCode?: string, upstreamParam?: string) {
+     super(message);
+     this.name = 'LLMApiError';
+     this.status = status;
+     this.retryAfterMs = retryAfterMs;
++    this.upstreamCode = upstreamCode;
++    this.upstreamParam = upstreamParam;
+   }
+ }
+ 
+@@ -115,7 +121,21 @@ function estimateTokens(messages: LLMMessage[]): number {
+   return Math.ceil(chars / 4);
+ }
+ 
+-async function throttleLLMRequest(messages: LLMMessage[]): Promise<void> {
++async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
++  if (!signal) return new Promise(resolve => setTimeout(resolve, ms));
++  if (signal.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? 'LLM request timed out' : 'LLM request aborted');
++  await new Promise<void>((resolve, reject) => {
++    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
++    const onAbort = () => {
++      clearTimeout(timer);
++      signal.removeEventListener('abort', onAbort);
++      reject(new Error(signal.reason?.name === 'TimeoutError' ? 'LLM request timed out' : 'LLM request aborted'));
++    };
++    signal.addEventListener('abort', onAbort, { once: true });
++  });
++}
++
++async function throttleLLMRequest(messages: LLMMessage[], signal?: AbortSignal): Promise<void> {
+   const tpmLimit = Number(process.env.T3MP3ST_LLM_TPM_LIMIT || '0');
+   const minInterval = Number(process.env.T3MP3ST_LLM_MIN_INTERVAL_MS || '0');
+   const maxWait = Number(process.env.T3MP3ST_LLM_MAX_WAIT_MS || (5 * 60 * 1000));
+@@ -126,6 +146,7 @@ async function throttleLLMRequest(messages: LLMMessage[]): Promise<void> {
+   const deadline = now + maxWait;
+ 
+   while (Date.now() < deadline) {
++    if (signal?.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? 'LLM request timed out' : 'LLM request aborted');
+     const cut = Date.now() - throttleWindowMs;
+     for (let i = throttleState.length - 1; i >= 0; i--) {
+       if (throttleState[i].at < cut) throttleState.splice(i, 1);
+@@ -138,7 +159,7 @@ async function throttleLLMRequest(messages: LLMMessage[]): Promise<void> {
+       throttleState.push({ at: Date.now(), tokens: requested });
+       return;
+     }
+-    await new Promise(resolve => setTimeout(resolve, 500));
++    await abortableDelay(500, signal);
+   }
+   throttleState.push({ at: Date.now(), tokens: requested });
+ }
+@@ -696,7 +717,9 @@ class OpenAIAdapter implements LLMProviderAdapter {
+     const requestBody: Record<string, unknown> = {
+       model: this.config.model,
+       messages: this.formatMessages(messages),
+-      max_tokens: options?.maxTokens || this.config.maxTokens || 4096,
++      max_tokens: hostedMode()
++        ? Math.min(options?.maxTokens || this.config.maxTokens || 4096, 1024)
++        : (options?.maxTokens || this.config.maxTokens || 4096),
+       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+       top_p: options?.topP,
+       stop: options?.stopSequences,
+@@ -711,20 +734,35 @@ class OpenAIAdapter implements LLMProviderAdapter {
+ 
+     const response = await fetch(url, {
+       method: 'POST',
++      ...(hostedMode() ? { redirect: 'error' as const } : {}),
+       headers: {
+         'Content-Type': 'application/json',
+         Authorization: `Bearer ${this.config.apiKey}`,
+       },
+       body: JSON.stringify(requestBody),
+-      signal: AbortSignal.timeout(this.config.timeout || 60000),
++      signal: options?.signal
++        ? AbortSignal.any([options.signal, AbortSignal.timeout(this.config.timeout || 60000)])
++        : AbortSignal.timeout(this.config.timeout || 60000),
+     });
+ 
+     if (!response.ok) {
+-      const errorText = await response.text();
+       const retryAfter = response.headers?.get?.('retry-after');
+       const retryAfterMs = retryAfter && /^\d+$/.test(retryAfter)
+         ? Number(retryAfter) * 1000
+         : undefined;
++      if (hostedMode()) {
++        let upstreamCode: string | undefined;
++        let upstreamParam: string | undefined;
++        try {
++          const payload = await response.json() as { error?: { code?: unknown; param?: unknown } };
++          const safeIdentifier = (value: unknown): string | undefined =>
++            typeof value === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(value) ? value : undefined;
++          upstreamCode = safeIdentifier(payload.error?.code);
++          upstreamParam = safeIdentifier(payload.error?.param);
++        } catch { /* never reflect provider error bodies */ }
++        throw new LLMApiError(`OpenAI-compatible API error: ${response.status}`, response.status, retryAfterMs, upstreamCode, upstreamParam);
++      }
++      const errorText = await response.text();
+       throw new LLMApiError(`OpenAI-compatible API error: ${response.status} - ${errorText}`, response.status, retryAfterMs);
+     }
+ 
+@@ -754,6 +792,109 @@ class OpenAIAdapter implements LLMProviderAdapter {
+   }
+ }
+ 
++/** GPT-6 on OpenAI's canonical API uses Responses; compatible providers and older
++ * OpenAI models keep the Chat Completions adapter above. The adapter holds only
++ * bounded, in-memory continuation items needed to replay stateless tool turns. */
++class OpenAIResponsesAdapter implements LLMProviderAdapter {
++  name = 'openai';
++  private config: LLMConfig;
++  private readonly continuationCache = new OpenAIResponsesContinuationCache();
++
++  constructor(config: LLMConfig) {
++    this.config = config;
++  }
++
++  validateConfig(): { valid: boolean; error?: string } {
++    if (!this.config.apiKey) {
++      return {
++        valid: false,
++        error: 'OpenAI API key is required. Get one at https://platform.openai.com/api-keys',
++      };
++    }
++    return { valid: true };
++  }
++
++  resetSession(): void {
++    this.continuationCache.clear();
++  }
++
++  async chat(messages: LLMMessage[], options?: ChatOptions): Promise<LLMResponse> {
++    const validation = this.validateConfig();
++    if (!validation.valid) throw new Error(validation.error);
++
++    const baseUrl = this.config.baseUrl || HOSTED_OPENAI_BASE_URL;
++    const url = `${baseUrl}/responses`;
++    let lease: ReturnType<OpenAIResponsesContinuationCache['prepareInput']> | undefined;
++    try {
++      lease = this.continuationCache.prepareInput(messages, options?.tools);
++      const requestBody: Record<string, unknown> = {
++        model: this.config.model,
++        input: lease.input,
++        store: false,
++        reasoning: { effort: 'low' },
++        max_output_tokens: hostedMode()
++          ? Math.min(options?.maxTokens || this.config.maxTokens || 4096, 1024)
++          : (options?.maxTokens || this.config.maxTokens || 4096),
++        include: ['reasoning.encrypted_content'],
++      };
++
++      if (options?.tools?.length) {
++        requestBody.tools = options.tools.map(tool => ({
++          type: 'function',
++          name: tool.name,
++          description: tool.description,
++          parameters: tool.parameters,
++          strict: false,
++        }));
++      }
++
++      const response = await fetch(url, {
++        method: 'POST',
++        ...(hostedMode() ? { redirect: 'error' as const } : {}),
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${this.config.apiKey}`,
++        },
++        body: JSON.stringify(requestBody),
++        signal: options?.signal
++          ? AbortSignal.any([options.signal, AbortSignal.timeout(this.config.timeout || 60000)])
++          : AbortSignal.timeout(this.config.timeout || 60000),
++      });
++
++      if (!response.ok) {
++        const retryAfter = response.headers?.get?.('retry-after');
++        const retryAfterMs = retryAfter && /^\d+$/.test(retryAfter)
++          ? Number(retryAfter) * 1000
++          : undefined;
++        if (hostedMode()) {
++          let upstreamCode: string | undefined;
++          let upstreamParam: string | undefined;
++          try {
++            const payload = await response.json() as { error?: { code?: unknown; param?: unknown } };
++            const safeIdentifier = (value: unknown): string | undefined =>
++              typeof value === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(value) ? value : undefined;
++            upstreamCode = safeIdentifier(payload.error?.code);
++            upstreamParam = safeIdentifier(payload.error?.param);
++          } catch { /* never reflect provider error bodies */ }
++          throw new LLMApiError(`OpenAI Responses API error: ${response.status}`, response.status, retryAfterMs, upstreamCode, upstreamParam);
++        }
++        const errorText = await response.text();
++        throw new LLMApiError(`OpenAI Responses API error: ${response.status} - ${errorText}`, response.status, retryAfterMs);
++      }
++
++      const data = await response.json() as unknown;
++      return this.continuationCache.parseResponse(data, this.config.model, options?.tools, lease);
++    } catch (error) {
++      if (error instanceof OpenAIResponsesPayloadError) {
++        throw new LLMApiError(error.message, 422, undefined, error.code, error.param);
++      }
++      throw error;
++    } finally {
++      lease?.release();
++    }
++  }
++}
++
+ // =============================================================================
+ // NANOGPT ADAPTER
+ // =============================================================================
+@@ -1685,7 +1826,9 @@ constructor(config: LLMConfig) {
+       case 'anthropic':
+         return new AnthropicAdapter(config);
+       case 'openai':
+-        return new OpenAIAdapter(config);
++        return (config.baseUrl || HOSTED_OPENAI_BASE_URL) === HOSTED_OPENAI_BASE_URL && /^gpt-6/i.test(config.model)
++          ? new OpenAIResponsesAdapter(config)
++          : new OpenAIAdapter(config);
+       case 'xai':
+         return new OpenAIAdapter(config); // xAI (Grok Build / grok-*) is OpenAI-compatible
+       case 'gemini':
+@@ -1746,8 +1889,20 @@ constructor(config: LLMConfig) {
+   ): Promise<LLMResponse> {
+     const startTime = Date.now();
+     this.emit('request:start', { messages });
++    let effectiveOptions = options;
++    if (hostedMode()) {
++      const totalDeadline = AbortSignal.timeout(30_000);
++      const signal = options?.signal ? AbortSignal.any([options.signal, totalDeadline]) : totalDeadline;
++      effectiveOptions = { ...options, signal };
++    }
+ 
+-    await throttleLLMRequest(messages);
++    try {
++      await throttleLLMRequest(messages, effectiveOptions?.signal);
++    } catch (error) {
++      const failure = error instanceof Error ? error : new Error('LLM request aborted');
++      this.emit('request:error', { error: failure, messages });
++      throw failure;
++    }
+ 
+     // The model ladder: primary first, then each configured fallback hop. A hop is
+     // tried when the rung above fails for ANY reason that model can't fix itself —
+@@ -1773,7 +1928,7 @@ constructor(config: LLMConfig) {
+       let response: LLMResponse | null = null;
+       for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
+         try {
+-          response = await adapter.chat(msgs, options);
++          response = await adapter.chat(msgs, effectiveOptions);
+           break;
+         } catch (error) {
+           lastError = error as Error;
+@@ -1788,9 +1943,13 @@ constructor(config: LLMConfig) {
+           // cloud fallback the operator may not want. Treat a local/local-agent timeout as
+           // permanent so the ladder advances straight to the next hop instead of retrying in place.
+           const isLocalProvider = hop.provider === 'local' || hop.provider === 'local-agent';
++          const isDeterministicResponsesError = adapter instanceof OpenAIResponsesAdapter
++            && error instanceof LLMApiError
++            && (error.status === 400 || error.status === 422);
+           const permanent = (error instanceof LLMApiError &&
+             (error.status === 401 || error.status === 403 || error.status === 404)) ||
+-            !!options?.signal?.aborted ||
++            isDeterministicResponsesError ||
++            !!effectiveOptions?.signal?.aborted ||
+             (isLocalProvider && classifyErrorKind(error as Error) === 'timeout');
+           if (permanent || attempt >= this.retryAttempts) break;
+           let delayMs = this.retryDelayMs * Math.pow(2, attempt - 1);
+@@ -1800,7 +1959,12 @@ constructor(config: LLMConfig) {
+             delayMs = Math.max(delayMs, Math.min(error.retryAfterMs, 120_000));
+           }
+           this.emit('request:retry', { attempt, maxAttempts: this.retryAttempts, error: lastError });
+-          await new Promise(resolve => setTimeout(resolve, delayMs));
++          try {
++            await abortableDelay(delayMs, effectiveOptions?.signal);
++          } catch (delayError) {
++            lastError = delayError instanceof Error ? delayError : new Error('LLM request aborted');
++            break;
++          }
+         }
+       }
+ 
+@@ -1811,7 +1975,7 @@ constructor(config: LLMConfig) {
+         reframeNext = false;
+         // An explicit cancellation means "stop", not "try a different model" — falling through to
+         // the next hop would silently start a fresh request the caller already asked to abandon.
+-        if (hasNext && !options?.signal?.aborted) {
++        if (hasNext && !effectiveOptions?.signal?.aborted) {
+           this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model, engaged: true, reason });
+           continue;
+         }
+@@ -1902,6 +2066,7 @@ constructor(config: LLMConfig) {
+    */
+   clearHistory(): void {
+     this.conversationHistory = [];
++    this.adapter.resetSession?.();
+   }
+ 
+   /**
+diff --git a/src/recon/whitebox.ts b/src/recon/whitebox.ts
+index bd34d93..3aaf816 100644
+--- a/src/recon/whitebox.ts
++++ b/src/recon/whitebox.ts
+@@ -49,6 +49,7 @@ import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node
+ import { execFileSync } from 'node:child_process';
+ import { homedir, tmpdir } from 'node:os';
+ import { join as joinPath, isAbsolute, relative, resolve, sep } from 'node:path';
++import { hostedMode, hostedChildEnvironment, HOSTED_OPENAI_BASE_URL } from '../hosted-policy.js';
+ 
+ /**
+  * Default worker-source token budget when building a source blob directly from a
+@@ -98,6 +99,7 @@ function isGitHubHttpsRepoUrl(input: string): boolean {
+     const url = new URL(input);
+     return url.protocol === 'https:' &&
+       url.hostname.toLowerCase() === 'github.com' &&
++      !url.username && !url.password && !url.port && !url.search && !url.hash &&
+       /^\/[^/]+\/[^/]+(?:\.git)?\/?$/.test(url.pathname);
+   } catch {
+     return false;
+@@ -113,8 +115,8 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource
+     throw new RepoCloneError('repoUrl must be an https://github.com/<owner>/<repo> URL');
+   }
+ 
+-  const token = getGitHubRepoToken();
+-  if (!token) {
++  const token = hostedMode() ? undefined : getGitHubRepoToken();
++  if (!token && !hostedMode()) {
+     throw new RepoCloneError('private GitHub repo scans require T3MP3ST_GITHUB_TOKEN or GITHUB_TOKEN');
+   }
+ 
+@@ -143,11 +145,12 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource
+       cloneDir,
+     ], {
+       stdio: ['ignore', 'ignore', 'pipe'],
++      ...(hostedMode() ? { timeout: 30_000, maxBuffer: 1024 * 1024 } : {}),
+       env: {
+-        ...process.env,
++        ...(hostedMode() ? hostedChildEnvironment() : process.env),
+         GIT_ASKPASS: askPassPath,
+         GIT_TERMINAL_PROMPT: '0',
+-        T3MP3ST_GIT_TOKEN: token,
++        ...(hostedMode() ? {} : { T3MP3ST_GIT_TOKEN: token }),
+       },
+     });
+ 
+@@ -158,7 +161,7 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource
+     };
+   } catch (error) {
+     rmSync(tempRoot, { recursive: true, force: true });
+-    const message = error instanceof Error ? error.message.replaceAll(token, '[REDACTED]') : 'git clone failed';
++    const message = error instanceof Error ? (token ? error.message.replaceAll(token, '[REDACTED]') : error.message) : 'git clone failed';
+     throw new RepoCloneError(`GitHub repo clone failed: ${message}`);
+   }
+ }
+@@ -195,7 +198,7 @@ export function resolveContainedRepoPath(input: unknown): string {
+   }
+   let root: string;
+   try {
+-    root = realpathSync(resolve(process.env.T3MP3ST_REPO_ROOT || homedir()));
++    root = realpathSync(resolve(process.env.T3MP3ST_REPO_ROOT || (hostedMode() ? '/tmp/t3mp3st-workspace' : homedir())));
+   } catch {
+     throw new RepoPathError('configured T3MP3ST_REPO_ROOT does not resolve to an existing path');
+   }
+@@ -286,7 +289,24 @@ export interface WhiteboxAnalysisResult {
+  *   TEMPEST_ORCHESTRATOR_PROVIDER / TEMPEST_ORCHESTRATOR_MODEL
+  *   TEMPEST_WORKER_PROVIDER       / TEMPEST_WORKER_MODEL
+  */
+-function buildDecompositionConfig(): DecompositionConfig {
++export function buildDecompositionConfig(): DecompositionConfig {
++  if (hostedMode()) {
++    const selectedModel = process.env.TEMPEST_OPENAI_MODEL || config.getLLMConfig('openai').model;
++    const hostedModel = config.getLLMConfig('openai', selectedModel);
++    if (hostedModel.baseUrl && hostedModel.baseUrl !== HOSTED_OPENAI_BASE_URL) {
++      throw new Error('Hosted white-box analysis requires the canonical OpenAI endpoint');
++    }
++    return {
++      orchestratorModel: hostedModel,
++      workerModel: hostedModel,
++      maxQueriesPerRound: 8,
++      maxRounds: 5,
++      workerMaxTokens: 512,
++      orchestratorMaxTokens: 1024,
++      parallelWorkers: true,
++      maxConcurrency: 2,
++    };
++  }
+   const orchestratorProvider =
+     (process.env.TEMPEST_ORCHESTRATOR_PROVIDER as LLMProvider) || 'openrouter';
+   const workerProvider =
+diff --git a/src/server.ts b/src/server.ts
+index e9fbec0..e2c8861 100755
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -12,12 +12,12 @@
+ import express, { Request, Response, NextFunction } from 'express';
+ import cors from 'cors';
+ import { execFile, spawn } from 'child_process';
+-import { appendFile, mkdir, readFile, writeFile } from 'fs/promises';
++import { readFile } from 'fs/promises';
+ import { join } from 'path';
+ import { promisify } from 'util';
+ import { createHash, randomUUID } from 'crypto';
+ import { config, AVAILABLE_MODELS } from './config/index.js';
+-import { resolveModels } from './config/provider-models.js';
++import { listProviderModels, resolveModels } from './config/provider-models.js';
+ import { initProxyFromConfig, configureProxy, getProxyStatus, checkIp, invalidateIpCache } from './net/proxy.js';
+ import { redactString, redactLedgerText, redactSecrets } from './redact.js';
+ import { LLMBackbone } from './llm/index.js';
+@@ -36,6 +36,8 @@ import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type O
+ import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
+ import { initGrammars } from './recon/ts-grammars.js';
+ import { redactCredential } from './evidence/index.js';
++import { hostedMode, hostedRuntimeReady, hostedLlmReady, hostedHealthReady, hostedRequestPolicy, hostedRequestBodyPolicy, hostedJsonError, hostedOriginAllowed, hostedSafeCommand, HOSTED_OPENAI_BASE_URL, readHostedRuntimeStatus, publicHostedRuntimeStatus, hostedChildEnvironment, markHostedPersistenceFailure, hasHostedPersistenceFailure } from './hosted-policy.js';
++import { SerializedPersistenceQueue, isValidHostedStateSnapshot, unknownStateFields } from './persistence/atomic-state.js';
+ 
+ const execFileAsync = promisify(execFile);
+ 
+@@ -183,6 +185,11 @@ const HOST = process.env.T3MP3ST_HOST || (process.env.DOCKER === 'true' ? '0.0.0
+ const HOST_IS_LOOPBACK = /^(127\.|localhost$|::1$|\[::1\]$)/i.test(HOST.trim());
+ 
+ const app = express();
++if (hostedMode()) app.set('case sensitive routing', true);
++
++// Hosted policy runs before CORS and body parsing so a foreign origin, bad Host,
++// cross-site fetch, or exhausted request bucket is rejected before body work.
++app.use(hostedRequestPolicy);
+ 
+ // --- Localhost origin allow-list ------------------------------------------
+ // A request from the same-origin UI, curl, or the CLI is trusted; a request
+@@ -201,6 +208,7 @@ function isLoopbackHostname(host: string): boolean {
+ }
+ function isLoopbackOrigin(originHeader: string | undefined): boolean {
+   if (!originHeader) return false;
++  if (hostedMode()) return hostedOriginAllowed(originHeader);
+   // B-01: the opaque origin "null" (sandboxed iframe, file://, some cross-origin
+   // redirects, data: documents) is deliberately NOT trusted — the UI is always
+   // http-served from 127.0.0.1, so a "null" Origin is a foreign/sandboxed caller,
+@@ -241,6 +249,7 @@ app.use(cors({
+   origin(origin, callback) {
+     // No Origin header (curl, CLI, server-to-server) → allow.
+     if (!origin) return callback(null, true);
++    if (hostedMode()) return callback(null, hostedOriginAllowed(origin));
+     if (isLoopbackOrigin(origin)) return callback(null, true);
+     return callback(null, false);
+   },
+@@ -294,7 +303,7 @@ function isLoopbackHost(hostHeader: string | undefined): boolean {
+   }
+   return isLoopbackHostname(h);
+ }
+-if (HOST_IS_LOOPBACK) {
++if (HOST_IS_LOOPBACK && !hostedMode()) {
+   app.use((req: Request, res: Response, next: NextFunction) => {
+     if (isLoopbackHost(req.headers.host)) return next();
+     res.status(403).json({
+@@ -304,7 +313,9 @@ if (HOST_IS_LOOPBACK) {
+   });
+ }
+ 
+-app.use(express.json({ limit: '10mb' }));
++app.use(express.json({ limit: hostedMode() ? '1mb' : '10mb' }));
++app.use(hostedRequestBodyPolicy);
++app.use(hostedJsonError);
+ 
+ // Request logging
+ app.use((req: Request, _res: Response, next: NextFunction) => {
+@@ -320,7 +331,12 @@ let llm: LLMBackbone | null = null;
+ 
+ async function initLLM(): Promise<LLMBackbone | null> {
+   try {
+-    const llmConfig = config.getLLMConfig();
++    const configured = hostedMode() ? config.getLLMConfig('openai') : config.getLLMConfig();
++    if (hostedMode() && configured.baseUrl && configured.baseUrl !== HOSTED_OPENAI_BASE_URL) {
++      console.warn('[T3MP3ST] Hosted mode requires the canonical OpenAI provider and URL');
++      return null;
++    }
++    const llmConfig = hostedMode() ? { ...configured, fallbackChain: [], timeout: Math.min(configured.timeout || 30_000, 30_000) } : configured;
+     if (providerNeedsApiKey(llmConfig.provider) && !llmConfig.apiKey) {
+       console.warn('[T3MP3ST] No API key configured - LLM features disabled');
+       return null;
+@@ -380,7 +396,8 @@ function createTempestCommandInstance(missionName: string, apiKey: string | unde
+       // llama.cpp / Ollama host). Never set it for cloud providers — that would
+       // let a request redirect a cloud call to an attacker-chosen endpoint.
+       ...(baseUrl && provider === 'local' ? { baseUrl } : {}),
+-      maxTokens: 4096,
++      maxTokens: hostedMode() ? 1024 : 4096,
++      ...(hostedMode() ? { timeout: 30_000 } : {}),
+       temperature: 0.7,
+     },
+   });
+@@ -559,7 +576,7 @@ async function executeCommand(command: string, timeout = 30000): Promise<ToolRes
+     return { success: false, output: '', error: parsed.error, duration: 0 };
+   }
+   try {
+-    const { stdout, stderr } = await execFileAsync(parsed.bin, parsed.args, { timeout, maxBuffer: 1024 * 1024 * 10 });
++    const { stdout, stderr } = await execFileAsync(parsed.bin, parsed.args, { timeout, maxBuffer: 1024 * 1024 * 10, ...(hostedMode() ? { env: hostedChildEnvironment() } : {}) });
+     return { success: true, output: stdout || stderr, duration: Date.now() - startTime };
+   } catch (error: any) {
+     return { success: false, output: error.stdout || '', error: error.message, duration: Date.now() - startTime };
+@@ -1120,6 +1137,7 @@ function replaceMapContents<T extends { id: string }>(map: Map<string, T>, value
+ 
+ function buildStateSnapshot(): Record<string, unknown> {
+   return {
++    ...restoredStateExtras,
+     schema_version: 't3mp3st_state/v1',
+     savedAt: nowIso(),
+     mode: currentMode(),
+@@ -1137,11 +1155,12 @@ function buildStateSnapshot(): Record<string, unknown> {
+   };
+ }
+ 
++const persistenceQueue = new SerializedPersistenceQueue();
++
+ async function persistState(reason = 'state.updated'): Promise<void> {
+   const file = stateFilePath();
+   if (!file) return;
+-  await mkdir(stateRoot(), { recursive: true });
+-  await writeFile(file, JSON.stringify(redactSecrets({ ...buildStateSnapshot(), reason }), null, 2));
++  await persistenceQueue.atomicWrite(file, JSON.stringify(redactSecrets({ ...buildStateSnapshot(), reason }), null, 2));
+ }
+ 
+ // Debounced full-snapshot writer. persistState re-serializes the ENTIRE (growing) snapshot,
+@@ -1163,6 +1182,8 @@ function schedulePersist(reason: string): void {
+     if (!persistPending) return;
+     persistPending = false;
+     void persistState(persistReason).catch(error => {
++      persistPending = true;
++      markHostedPersistenceFailure();
+       console.warn(`[T3MP3ST] State persistence failed: ${error.message || error}`);
+     });
+   }, PERSIST_DEBOUNCE_MS);
+@@ -1172,27 +1193,45 @@ function schedulePersist(reason: string): void {
+ // can't drop the last <1s of state on SIGTERM/SIGINT — Ctrl-C, docker stop, systemctl restart).
+ // state.json is the only restore source, so this closes the data-loss gap the debounce opened.
+ async function flushPersist(): Promise<void> {
+-  if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+-  if (persistPending) {
+-    persistPending = false;
+-    await persistState(persistReason);
++  for (;;) {
++    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
++    if (persistPending) {
++      persistPending = false;
++      await persistState(persistReason);
++    }
++    await persistenceQueue.drain();
++    if (!persistPending && !persistTimer) break;
+   }
+ }
+ 
+ async function appendStateEvent(type: string, payload: Record<string, unknown>): Promise<void> {
+   const file = eventsFilePath();
+   if (!file) return;
+-  await mkdir(stateRoot(), { recursive: true });
+   const event = redactSecrets({ ts: nowIso(), type, payload });
+-  await appendFile(file, `${JSON.stringify(event)}\n`);
++  await persistenceQueue.append(file, `${JSON.stringify(event)}\n`);
+ }
+ 
++const STATE_SNAPSHOT_KEYS = new Set([
++  'schema_version', 'savedAt', 'mode', 'reason',
++  'missionDrafts', 'improvementProposals', 'approvalRequests', 'evidenceLedger',
++  'findingsLedger', 'retestLedger', 'hypothesisLedger', 'workOrderLedger',
++  'watchCycleLedger', 'memoryCapsule', 'memoryProposals',
++]);
++const restoredStateExtras: Record<string, unknown> = {};
++
+ async function loadPersistedState(): Promise<void> {
+   const file = stateFilePath();
+   if (!file) return;
+   try {
+     const raw = await readFile(file, 'utf8');
+     const state = JSON.parse(raw) as Record<string, unknown>;
++    Object.assign(restoredStateExtras, unknownStateFields(state, STATE_SNAPSHOT_KEYS));
++    if (hostedMode()) {
++      const requiredArrays = ['missionDrafts', 'improvementProposals', 'approvalRequests', 'evidenceLedger', 'findingsLedger', 'retestLedger', 'hypothesisLedger', 'workOrderLedger', 'watchCycleLedger', 'memoryCapsule', 'memoryProposals'];
++      if (!isValidHostedStateSnapshot(state, requiredArrays)) {
++        throw new Error('Hosted state snapshot schema is invalid');
++      }
++    }
+     replaceMapContents(missionDrafts, state.missionDrafts);
+     replaceMapContents(improvementProposals, state.improvementProposals);
+     replaceMapContents(approvalRequests, state.approvalRequests);
+@@ -1207,6 +1246,7 @@ async function loadPersistedState(): Promise<void> {
+     console.log(`[T3MP3ST] State restored from ${file}`);
+   } catch (error: any) {
+     if (error?.code !== 'ENOENT') {
++      if (hostedMode()) throw new Error('Hosted state restore failed; refusing to start with empty state');
+       console.warn(`[T3MP3ST] State restore skipped: ${error.message || error}`);
+     }
+   }
+@@ -4572,6 +4612,9 @@ const { stdout } = await execFileAsync(probe, [adapter.binary], { timeout: 1500
+ async function buildPreflightReport(): Promise<Record<string, unknown>> {
+   const tools = await inspectToolAvailability();
+   const llmConfig = config.getLLMConfig();
++  const runtime = hostedMode() ? await readHostedRuntimeStatus() : null;
++  const inferenceReady = !hostedMode() || hostedLlmReady(runtime);
++  const durabilityReady = !hostedMode() || (hostedRuntimeReady(runtime) && !hasHostedPersistenceFailure());
+   const requiredTools = new Set(['file', 'curl', 'git']);
+   const missingRequired = tools.filter(tool => requiredTools.has(tool.name) && !tool.available).map(tool => tool.name);
+   const missingRecon = tools.filter(tool => ['nmap', 'dig'].includes(tool.name) && !tool.available).map(tool => tool.name);
+@@ -4586,8 +4629,8 @@ async function buildPreflightReport(): Promise<Record<string, unknown>> {
+   const adapterCoverage = Math.min(100, Math.round((TOOL_ADAPTERS.length / FRONTIER_ARSENAL_MILESTONE) * 100));
+   const checks = [
+     { id: 'api', label: 'API server', status: 'ok', detail: `mode=${currentMode()}` },
+-    { id: 'storage', label: 'State storage', status: 'ok', detail: stateRoot() },
+-    { id: 'llm', label: 'LLM provider', status: llmConfig.apiKey ? 'ok' : 'warn', detail: llmConfig.apiKey ? `${llmConfig.provider}:${llmConfig.model}` : 'No API key configured; local contracts and drills still work.' },
++    { id: 'storage', label: 'State storage', status: durabilityReady ? 'ok' : 'block', detail: stateRoot() },
++    { id: 'llm', label: 'LLM provider', status: !inferenceReady ? 'block' : llmConfig.apiKey ? 'ok' : 'warn', detail: !inferenceReady ? 'Actual inference verification is pending or failed' : llmConfig.apiKey ? `${llmConfig.provider}:${llmConfig.model}` : 'No API key configured; local contracts and drills still work.' },
+     { id: 'tools-core', label: 'Core tools', status: missingRequired.length ? 'block' : 'ok', detail: missingRequired.length ? `Missing ${missingRequired.join(', ')}` : 'file, curl, and git detected' },
+     { id: 'tools-recon', label: 'Recon tools', status: missingRecon.length ? 'warn' : 'ok', detail: missingRecon.length ? `Missing ${missingRecon.join(', ')}` : 'nmap and dig detected' },
+     { id: 'arsenal-catalog', label: 'Tool adapter catalog', status: TOOL_ADAPTERS.length >= 45 ? 'ok' : 'warn', detail: `${TOOL_ADAPTERS.length}/${FRONTIER_ARSENAL_MILESTONE} wired / ${installedCommandReady}/${commandReadyTools.length} installed / ${missingHighValue.length} high-value missing` },
+@@ -4600,7 +4643,7 @@ async function buildPreflightReport(): Promise<Record<string, unknown>> {
+   ];
+   const score = Math.round((checks.filter(check => check.status === 'ok').length / checks.length) * 100);
+   return {
+-    ok: !missingRequired.length,
++    ok: !missingRequired.length && inferenceReady && durabilityReady,
+     score,
+     mode: currentMode(),
+     checks,
+@@ -4816,6 +4859,7 @@ function emitContractEvent(type: string, payload: Record<string, unknown>): void
+     ...payload,
+   });
+   void appendStateEvent(type, payload).catch(error => {
++    markHostedPersistenceFailure();
+     console.warn(`[T3MP3ST] Event persistence failed: ${error.message || error}`);
+   });
+   schedulePersist(type);
+@@ -4827,6 +4871,7 @@ function emitContractEvent(type: string, payload: Record<string, unknown>): void
+ 
+ /** Connected SSE clients */
+ const sseClients: Set<Response> = new Set();
++let httpServer: ReturnType<typeof app.listen> | null = null;
+ 
+ /** Broadcast an event to all connected SSE clients */
+ export function broadcastEvent(event: string, data: Record<string, unknown>): void {
+@@ -4897,11 +4942,24 @@ app.get('/api/events', (_req: Request, res: Response) => {
+ // API ENDPOINTS - HEALTH & STATUS
+ // =============================================================================
+ 
+-app.get(['/health', '/api/health'], (_req: Request, res: Response) => {
+-  res.json({
++app.get('/api/runtime/status', async (_req: Request, res: Response): Promise<void> => {
++  if (!hostedMode()) { res.json({ enabled: false, ready: true, readOnly: false }); return; }
++  const status = await readHostedRuntimeStatus();
++  if (!status) { res.status(503).json({ error: 'Hosted runtime status is unavailable' }); return; }
++  res.status(hostedHealthReady(status) && !hasHostedPersistenceFailure() ? 200 : 503).json(publicHostedRuntimeStatus(status));
++});
++
++app.get(['/health', '/api/health'], async (_req: Request, res: Response): Promise<void> => {
++  const runtime = hostedMode() ? await readHostedRuntimeStatus() : null;
++  const durableReady = !hostedMode() || (hostedHealthReady(runtime) && !hasHostedPersistenceFailure());
++  res.status(durableReady ? 200 : 503).json({
+     ...healthPayload(),
++    ok: durableReady,
++    status: durableReady ? 'operational' : 'degraded',
++    ...(hostedMode() ? { llm: { configured: Boolean(llm), connected: hostedLlmReady(runtime), provider: 'openai', model: config.getLLMConfig('openai').model } } : {}),
+     payload_db_size: Object.values(PAYLOAD_DB).reduce((sum, cat) =>
+       sum + Object.values(cat).reduce((s, arr) => s + arr.length, 0), 0),
++    ...(hostedMode() ? { runtime: runtime ? publicHostedRuntimeStatus(runtime) : { ready: false, readOnly: true } } : {}),
+   });
+ });
+ 
+@@ -5946,8 +6004,11 @@ app.patch('/api/mission-drafts/:id', (req: Request, res: Response) => {
+ });
+ 
+ app.delete('/api/mission-drafts/:id', (req: Request, res: Response) => {
+-  const deleted = missionDrafts.delete(req.params.id);
+-  res.json({ success: deleted });
++  const draft = missionDrafts.get(req.params.id);
++  if (!draft) { res.status(404).json({ error: 'Mission draft not found' }); return; }
++  missionDrafts.delete(req.params.id);
++  emitContractEvent('draft.deleted', { draftId: req.params.id });
++  res.json({ success: true });
+ });
+ 
+ app.post('/api/route-preview', (req: Request, res: Response) => {
+@@ -6213,7 +6274,13 @@ app.get('/api/selfimprove/ledger', async (_req: Request, res: Response): Promise
+   });
+ });
+ 
+-app.get('/api/llm/status', (_req: Request, res: Response) => {
++app.get('/api/llm/status', async (_req: Request, res: Response) => {
++  if (hostedMode()) {
++    const llmConfig = config.getLLMConfig('openai');
++    const runtime = await readHostedRuntimeStatus();
++    res.json({ initialized: !!llm, connected: hostedLlmReady(runtime), ready: hostedLlmReady(runtime), provider: 'openai', model: llmConfig.model, hasApiKey: !!llmConfig.apiKey, configured: Boolean(llmConfig.apiKey) });
++    return;
++  }
+   const llmConfig = config.getLLMConfig();
+   res.json({
+     connected: !!llm,
+@@ -6230,7 +6297,31 @@ app.get('/api/llm/status', (_req: Request, res: Response) => {
+ // and it stays on localhost). Body values override server config; missing → server config. Runs
+ // server-side so the browser dodges provider CORS, and fails open to the static AVAILABLE_MODELS list
+ // (source:'static') so a missing key / network error never leaves the panel empty.
++async function respondWithHostedModels(res: Response): Promise<void> {
++  try {
++    const cfg = config.getLLMConfig('openai');
++    const baseUrl = cfg.baseUrl || HOSTED_OPENAI_BASE_URL;
++    if (baseUrl !== HOSTED_OPENAI_BASE_URL) {
++      res.status(503).json({ error: 'Hosted OpenAI endpoint is not configured safely' });
++      return;
++    }
++    const models = await listProviderModels('openai', { baseUrl, apiKey: cfg.apiKey, timeoutMs: 8000 });
++    res.json({ provider: 'openai', source: 'live', models });
++  } catch {
++    res.status(502).json({ error: 'OpenAI model list is unavailable' });
++  }
++}
++
++app.get('/api/models', async (_req: Request, res: Response): Promise<void> => {
++  if (!hostedMode()) { res.status(404).json({ error: 'Not found' }); return; }
++  await respondWithHostedModels(res);
++});
++
+ app.post('/api/models', async (req: Request, res: Response): Promise<void> => {
++  if (hostedMode()) {
++    await respondWithHostedModels(res);
++    return;
++  }
+   const body = (req.body ?? {}) as { provider?: string; apiKey?: string; baseUrl?: string };
+   const defaultProvider = config.getLLMConfig().provider;
+   const requestedProvider = (typeof body.provider === 'string' && body.provider.trim()) || defaultProvider;
+@@ -6263,7 +6354,13 @@ app.post('/api/tools/execute', async (req: Request, res: Response): Promise<void
+   if (!command) { res.status(400).json({ error: 'Command required' }); return; }
+   const parsed = parseCommand(command);
+   if ('error' in parsed) { res.status(400).json({ error: parsed.error }); return; }
+-  const targetResolution = resolveCommandExecutionTarget(body, parsed);
++  if (hostedMode() && !hostedSafeCommand(parsed.bin, parsed.args)) {
++    res.status(403).json({ error: 'Hosted mode permits only local tool version checks; use /api/tools/recon for scoped network work' });
++    return;
++  }
++  const targetResolution = hostedMode() && hostedSafeCommand(parsed.bin, parsed.args)
++    ? { target: 'local-host' }
++    : resolveCommandExecutionTarget(body, parsed);
+   if ('error' in targetResolution) { res.status(400).json({ error: targetResolution.error }); return; }
+   const guard = guardAction(body, 'command_execution', targetResolution.target, `Run ${parsed.bin} against ${targetResolution.target}`);
+   if (!guard.allowed) { blockForApproval(res, guard); return; }
+@@ -6367,13 +6464,41 @@ app.get('/api/tools', (_req: Request, res: Response) => {  res.json({
+ app.post('/api/llm/chat', async (req: Request, res: Response): Promise<void> => {
+   // Caller-supplied systemPrompt is a local-operator convenience (the UI uses it);
+   // safe here because the cross-origin CSRF guard above blocks foreign-webpage drive-by.
+-  const { message, systemPrompt } = req.body;
+-  if (!message) { res.status(400).json({ error: 'Message required' }); return; }
++  const body = (req.body || {}) as Record<string, unknown>;
++  const { message, systemPrompt } = body;
++  if (typeof message !== 'string' || !message.trim() || message.length > 12_000) { res.status(400).json({ error: 'Message must be a non-empty string of at most 12000 characters' }); return; }
++  if (systemPrompt !== undefined && (typeof systemPrompt !== 'string' || systemPrompt.length > 2_000)) { res.status(400).json({ error: 'systemPrompt must be a string of at most 2000 characters' }); return; }
+   if (!llm) { res.status(503).json({ error: 'LLM not configured' }); return; }
++  const rawMaxTokens = body.maxTokens;
++  if (rawMaxTokens !== undefined && (typeof rawMaxTokens !== 'number' || !Number.isInteger(rawMaxTokens) || rawMaxTokens < 1 || rawMaxTokens > 1024)) {
++    res.status(400).json({ error: 'maxTokens must be an integer between 1 and 1024' }); return;
++  }
++  const maxTokens = typeof rawMaxTokens === 'number' ? rawMaxTokens : 512;
++  const controller = new AbortController();
++  res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+   try {
+-    const response = await llm.prompt(message, systemPrompt);
++    const response = await llm.prompt(message, systemPrompt, {
++      maxTokens: Math.min(maxTokens, 1024),
++      signal: controller.signal,
++    });
+     res.json({ success: true, response });
+-  } catch { res.status(500).json({ error: 'LLM request failed' }); }
++  } catch (error) {
++    if (res.headersSent || res.destroyed) return;
++    const status = Number((error as { status?: number })?.status);
++    const safeIdentifier = (value: unknown): string | undefined =>
++      typeof value === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(value) ? value : undefined;
++    const diagnostics = Number.isInteger(status) && status > 0 ? {
++      upstreamStatus: status,
++      ...(safeIdentifier((error as { upstreamCode?: unknown })?.upstreamCode) ? { upstreamCode: safeIdentifier((error as { upstreamCode?: unknown }).upstreamCode) } : {}),
++      ...(safeIdentifier((error as { upstreamParam?: unknown })?.upstreamParam) ? { upstreamParam: safeIdentifier((error as { upstreamParam?: unknown }).upstreamParam) } : {}),
++    } : {};
++    const timedOut = controller.signal.aborted || /timeout|timed?\s*out|abort/i.test((error as Error)?.message || '');
++    if (timedOut) res.status(504).json({ error: 'LLM request timed out' });
++    else if (status === 429) res.status(429).json({ error: 'OpenAI rate limit exceeded', ...diagnostics });
++    else if (status === 401 || status === 403) res.status(502).json({ error: 'OpenAI rejected the configured server credential', ...diagnostics });
++    else if (status >= 500) res.status(502).json({ error: 'OpenAI service is unavailable', ...diagnostics });
++    else res.status(502).json({ error: 'LLM request failed', ...diagnostics });
++  }
+ });
+ 
+ // =============================================================================
+@@ -6994,8 +7119,10 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
+   temperature: number;
+   timeout: number;
+ } {
++  if (hostedMode() && provider && provider !== 'openai') throw new Error('Hosted API supports only OpenAI');
++  if (hostedMode() && baseUrl && baseUrl !== HOSTED_OPENAI_BASE_URL) throw new Error('Hosted API supports only the canonical OpenAI endpoint');
+   const defaultConfig = config.getLLMConfig();
+-  const selectedProvider = provider || defaultConfig.provider;
++  const selectedProvider = hostedMode() ? 'openai' : (provider || defaultConfig.provider);
+   // Local-agent backends use their own CLI login and need no T3MP3ST API key.
+   if (selectedProvider === 'local-agent') {
+     return {
+@@ -7009,6 +7136,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
+     };
+   }
+   const baseConfig = config.getLLMConfig(selectedProvider as any, model);
++  if (hostedMode() && baseConfig.baseUrl && baseConfig.baseUrl !== HOSTED_OPENAI_BASE_URL) throw new Error('Hosted OpenAI endpoint is not configured safely');
+   // A per-request base URL is honored ONLY for the local provider (the operator's own
+   // llama.cpp / Ollama host). For any cloud provider it is ignored — never let a request
+   // redirect a cloud call. A malformed/non-HTTP URL throws (callers already 400 on throw).
+@@ -7035,9 +7163,9 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
+     // Only override the configured URL for a local provider. Cloud providers keep
+     // their own provider URL and cannot be redirected by a request.
+     ...(selectedProvider === 'local' && localBaseUrl ? { baseUrl: localBaseUrl } : {}),
+-    maxTokens: 8192,
++    maxTokens: hostedMode() ? 1024 : 8192,
+     temperature: 0.4,
+-    timeout: readGeneralTimeoutEnv() ?? 300000, // General planning needs room (was a hardcoded 60s); override via env
++    timeout: hostedMode() ? 30_000 : (readGeneralTimeoutEnv() ?? 300000), // hosted calls have a fixed total cap
+   };
+ }
+ 
+@@ -8208,13 +8336,25 @@ async function startServer() {
+   const flushAndExit = (signal: NodeJS.Signals): void => {
+     if (shuttingDown) return;
+     shuttingDown = true;
+-    console.log(`[T3MP3ST] ${signal} received — flushing state, shutting down…`);
+-    void flushPersist().catch(() => { /* best-effort */ }).finally(() => process.exit(0));
++    console.log(`[T3MP3ST] ${signal} received — stopping intake and draining state…`);
++    const closed = httpServer
++      ? new Promise<void>(resolve => httpServer?.close(() => resolve()))
++      : Promise.resolve();
++    if (activeGeneral) activeGeneral.stopMonitoring();
++    getTempestCommand()?.stop();
++    for (const client of sseClients) client.end();
++    void closed
++      .then(() => flushPersist())
++      .then(() => process.exit(0))
++      .catch(error => {
++        console.error('[T3MP3ST] State flush failed during shutdown:', error instanceof Error ? error.message : 'unknown error');
++        process.exit(1);
++      });
+   };
+   process.once('SIGTERM', flushAndExit);
+   process.once('SIGINT', flushAndExit);
+ 
+-  app.listen(Number(PORT), HOST, () => {
++  httpServer = app.listen(Number(PORT), HOST, () => {
+     console.log(`[T3MP3ST] Server running at http://${HOST}:${PORT}`);
+     console.log(`[T3MP3ST] Web UI available at http://${HOST}:${PORT}/ui`);
+     if (!HOST_IS_LOOPBACK) {
+@@ -8273,4 +8413,7 @@ async function startServer() {
+   });
+ }
+ 
+-startServer().catch(console.error);
++startServer().catch(error => {
++  console.error('[T3MP3ST] Server startup failed:', error instanceof Error ? error.message : 'unknown error');
++  process.exitCode = 1;
++});
+diff --git a/release.json b/release.json
+new file mode 100644
+index 0000000..dda324a
+--- /dev/null
++++ b/release.json
+@@ -0,0 +1,10 @@
++{
++  "release": "2026-10-07-production-audit",
++  "upstreamCommit": "29824d5625ede419ac8cdae418c8f4c72c6270f7",
++  "sourceRepository": "moha700m/New-newtwor",
++  "sourceBranch": "web-tools-runtime",
++  "nodeImage": "node:22.23.3-alpine3.24@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402",
++  "storageSchema": "t3mp3st_blob_state/v2",
++  "preferredModel": "gpt-6.1-sol",
++  "hostedPolicy": true
++}
 diff --git a/src/__tests__/atomic-state.test.ts b/src/__tests__/atomic-state.test.ts
 new file mode 100644
 index 0000000..12d6ba0
@@ -149,10 +1178,10 @@ index 0000000..6add920
 +});
 diff --git a/src/__tests__/hosted-policy.test.ts b/src/__tests__/hosted-policy.test.ts
 new file mode 100644
-index 0000000..ec84444
+index 0000000..db3ea27
 --- /dev/null
 +++ b/src/__tests__/hosted-policy.test.ts
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,149 @@
 +import { afterEach, describe, expect, it, vi } from 'vitest';
 +import { config } from '../config/index.js';
 +import { buildDecompositionConfig } from '../recon/whitebox.js';
@@ -167,6 +1196,8 @@ index 0000000..ec84444
 +  hostedOriginAllowed,
 +  hostedRequestPolicy,
 +  hostedRuntimeReady,
++  hostedLlmReady,
++  hostedHealthReady,
 +  publicHostedRuntimeStatus,
 +  hostedChildEnvironment,
 +} from '../hosted-policy.js';
@@ -241,6 +1272,18 @@ index 0000000..ec84444
 +    expect(hostedRuntimeReady({ ready: true, readOnly: false, leaseExpiresAt: 'not-a-date' })).toBe(false);
 +  });
 +
++  it('separates storage mutation readiness from completed inference health', () => {
++    const durable = { ready: true, readOnly: false, llm: { ready: true, smoke: { enabled: true, complete: false, ok: false } } };
++    expect(hostedRuntimeReady(durable)).toBe(true);
++    expect(hostedLlmReady(durable)).toBe(false);
++    expect(hostedHealthReady(durable)).toBe(false);
++    const failed = { ...durable, llm: { ready: false, smoke: { enabled: true, complete: true, ok: false } } };
++    expect(hostedHealthReady(failed)).toBe(false);
++    const verified = { ...durable, llm: { ready: true, smoke: { enabled: true, complete: true, ok: true } } };
++    expect(hostedHealthReady(verified)).toBe(true);
++    expect(hostedHealthReady({ ...verified, readOnly: true })).toBe(false);
++  });
++
 +  it('rejects a cross-site request before any body or route work', () => {
 +    process.env.T3MP3ST_HOSTED = 'true';
 +    const req = {
@@ -288,139 +1331,463 @@ index 0000000..ec84444
 +    expect((largeRes as { status: ReturnType<typeof vi.fn> }).status).toHaveBeenCalledWith(413);
 +  });
 +});
-diff --git a/src/arsenal/index.ts b/src/arsenal/index.ts
-index dec82e4..34a3346 100755
---- a/src/arsenal/index.ts
-+++ b/src/arsenal/index.ts
-@@ -23,6 +23,7 @@ import { jsAnalyzeTool } from './js-analyze.js';
- import { kevCheckTool } from './kev.js';
- import { binarySinkScanTool } from './binary.js';
- import { r2AnalyzeTool } from './r2-analyze.js';
-+import { hostedMode, hostedChildEnvironment } from '../hosted-policy.js';
- 
- const execFileAsync = promisify(execFile);
- import type {
-@@ -3380,6 +3381,7 @@ export async function runSubprocess(
-     const { stdout, stderr } = await execFileAsync(command, args, {
-       timeout,
-       maxBuffer: maxOutput,
-+      ...(hostedMode() ? { env: hostedChildEnvironment() } : {}),
-     });
-     return { stdout, stderr, exitCode: 0 };
-   } catch (error: unknown) {
-diff --git a/src/config/index.ts b/src/config/index.ts
-index ab7cdb4..ca26d62 100755
---- a/src/config/index.ts
-+++ b/src/config/index.ts
-@@ -7,6 +7,7 @@
- 
- import Conf from 'conf';
- import { homedir } from 'os';
-+import { hostedMode } from '../hosted-policy.js';
- import { isAbsolute, join } from 'path';
- import { existsSync, readFileSync, writeFileSync } from 'fs';
- import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
-@@ -756,7 +757,7 @@ class ConfigManager {
-     // Load only T3MP3ST-owned/home env files. Do NOT read process.cwd()/.env:
-     // operators often run T3MP3ST inside target repos, and importing that repo's
-     // secrets would contaminate this process with unrelated credentials.
--    const envPaths = this.configDirectory ? [join(this.configDirectory, '.env')] : [
-+    const envPaths = hostedMode() ? [] : this.configDirectory ? [join(this.configDirectory, '.env')] : [
-       join(homedir(), '.t3mp3st', '.env'),
-       join(homedir(), '.env'),
-     ];
-@@ -829,6 +830,7 @@ class ConfigManager {
-    * Set an API key for a provider
-    */
-   setApiKey(provider: ApiKeyProvider, key: string): void {
-+    if (hostedMode()) throw new Error('Hosted mode accepts provider credentials only through server environment variables');
-     const apiKeys = this.config.get('apiKeys');
-     apiKeys[provider] = key;
-     this.config.set('apiKeys', apiKeys);
-@@ -839,6 +841,7 @@ class ConfigManager {
-    * the saved value; returns '' when egress should leave from the operator's own IP.
-    */
-   getProxyUrl(): string {
-+    if (hostedMode()) return '';
-     const env = process.env.TEMPEST_PROXY_URL?.trim();
-     if (env) return env;
-     return (this.config.get('proxyUrl') || '').trim();
-@@ -846,6 +849,7 @@ class ConfigManager {
- 
-   /** Persist the proxy URL (pass '' to clear). Does NOT install it — see net/proxy. */
-   setProxyUrl(url: string): void {
-+    if (hostedMode()) throw new Error('Outbound proxy configuration is unavailable in hosted mode');
-     this.config.set('proxyUrl', (url || '').trim());
-   }
- 
-@@ -894,6 +898,9 @@ class ConfigManager {
-     const envKey = process.env[envVarMap[provider]];
-     if (envKey) return envKey;   // a non-empty env var wins; empty/unset falls through
- 
-+    // Hosted deployments never lend keys from a developer's persisted config store.
-+    if (hostedMode()) return undefined;
+diff --git a/src/__tests__/openai-responses.test.ts b/src/__tests__/openai-responses.test.ts
+new file mode 100644
+index 0000000..4200eba
+--- /dev/null
++++ b/src/__tests__/openai-responses.test.ts
+@@ -0,0 +1,445 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import type { LLMConfig, LLMMessage, LLMToolDefinition } from '../types/index.js';
++import { LLMBackbone } from '../llm/index.js';
++import { HOSTED_OPENAI_BASE_URL } from '../hosted-policy.js';
 +
-     // Otherwise fall back to the stored config
-     return this.config.get('apiKeys')[provider];
-   }
-@@ -958,6 +965,11 @@ class ConfigManager {
-   getLLMConfig(provider?: LLMProvider, model?: string): LLMConfig {
-     let actualProvider = provider;
- 
-+    if (hostedMode()) {
-+      if (provider && provider !== 'openai') throw new Error('Hosted mode supports only the OpenAI provider');
-+      actualProvider = 'openai';
++const previousHosted = process.env.T3MP3ST_HOSTED;
++const tool: LLMToolDefinition = {
++  name: 'http_probe',
++  description: 'Probe an in-scope URL',
++  parameters: {
++    type: 'object',
++    properties: { url: { type: 'string' } },
++    required: ['url'],
++  },
++};
++
++afterEach(() => {
++  vi.unstubAllGlobals();
++  if (previousHosted === undefined) delete process.env.T3MP3ST_HOSTED;
++  else process.env.T3MP3ST_HOSTED = previousHosted;
++});
++
++function backbone(overrides: Partial<LLMConfig> = {}): LLMBackbone {
++  const llm = new LLMBackbone({
++    provider: 'openai', model: 'gpt-6.1-sol', apiKey: 'test-key',
++    baseUrl: HOSTED_OPENAI_BASE_URL, timeout: 30_000, fallbackChain: [], ...overrides,
++  });
++  llm.setRetryConfig(1, 0);
++  return llm;
++}
++
++function response(body: unknown, status = 200): Response {
++  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
++}
++
++function assistantMessage(messages: LLMMessage[]): LLMMessage & { role: 'assistant' } {
++  const message = messages[1];
++  if (!message || message.role !== 'assistant') throw new Error('Test history is missing its assistant turn');
++  return message as LLMMessage & { role: 'assistant' };
++}
++
++function toolResponse({
++  callId = 'call_native_1',
++  outputId = 'fc_output_1',
++  encryptedContent = 'encrypted-reasoning-1',
++  phase = 'commentary',
++  assistantText = 'Inspect the scoped target.',
++  argumentsText = '{"url":"https://lab.example"}',
++}: {
++  callId?: string;
++  outputId?: string;
++  encryptedContent?: string;
++  phase?: string;
++  assistantText?: string;
++  argumentsText?: string;
++} = {}): unknown {
++  return {
++    id: `resp_${callId}`,
++    status: 'completed',
++    model: 'gpt-6.1-sol',
++    output: [
++      { id: `rs_${callId}`, type: 'reasoning', encrypted_content: encryptedContent },
++      {
++        id: `msg_${callId}`, type: 'message', role: 'assistant', phase, status: 'completed',
++        content: [{ type: 'output_text', text: assistantText, annotations: [] }],
++      },
++      {
++        id: outputId, type: 'function_call', status: 'completed', call_id: callId,
++        name: 'http_probe', arguments: argumentsText,
++      },
++    ],
++    usage: { input_tokens: 23, output_tokens: 6, total_tokens: 29 },
++  };
++}
++
++describe('OpenAI GPT-6 Responses transport', () => {
++  it('uses Responses only for canonical OpenAI GPT-6 models and sends the supported body', async () => {
++    process.env.T3MP3ST_HOSTED = 'true';
++    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => response({
++      id: 'resp_text', status: 'completed', model: 'gpt-6.1-sol',
++      output: [{ type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: 'ready' }] }],
++    }));
++    vi.stubGlobal('fetch', fetch);
++
++    await backbone().prompt('test', undefined, { maxTokens: 9000, temperature: 0.4, topP: 0.2, stopSequences: ['STOP'] });
++    const [url, init] = fetch.mock.calls[0] ?? [];
++    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
++    expect(url).toBe(`${HOSTED_OPENAI_BASE_URL}/responses`);
++    expect(body).toMatchObject({
++      model: 'gpt-6.1-sol', store: false, max_output_tokens: 1024,
++      reasoning: { effort: 'low' }, include: ['reasoning.encrypted_content'], input: [{ role: 'user', content: 'test' }],
++    });
++    expect(body).not.toHaveProperty('temperature');
++    expect(body).not.toHaveProperty('top_p');
++    expect(body).not.toHaveProperty('stop');
++    expect(body).not.toHaveProperty('max_tokens');
++
++    fetch.mockClear();
++    delete process.env.T3MP3ST_HOSTED;
++    await backbone().prompt('test', undefined, { maxTokens: 2048 });
++    expect(fetch.mock.calls[0]?.[0]).toBe(`${HOSTED_OPENAI_BASE_URL}/responses`);
++    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).max_output_tokens).toBe(2048);
++  });
++
++  it('keeps non-GPT-6 OpenAI models and OpenAI-compatible providers on Chat Completions', async () => {
++    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => response({ choices: [{ message: { content: 'legacy' }, finish_reason: 'stop' }] }));
++    vi.stubGlobal('fetch', fetch);
++
++    await backbone({ model: 'gpt-5.4' }).prompt('legacy');
++    expect(fetch.mock.calls[0]?.[0]).toBe(`${HOSTED_OPENAI_BASE_URL}/chat/completions`);
++    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toHaveProperty('max_tokens');
++
++    fetch.mockClear();
++    await backbone({ provider: 'xai', model: 'gpt-6.1-sol', baseUrl: 'https://api.x.ai/v1' }).prompt('compatible');
++    expect(fetch.mock.calls[0]?.[0]).toBe('https://api.x.ai/v1/chat/completions');
++
++    fetch.mockClear();
++    await backbone({ model: 'gpt-6.1-sol', baseUrl: 'https://proxy.example/v1' }).prompt('custom OpenAI-compatible endpoint');
++    expect(fetch.mock.calls[0]?.[0]).toBe('https://proxy.example/v1/chat/completions');
++
++    const retryFetch = vi.fn()
++      .mockResolvedValueOnce(new Response('retryable legacy error', { status: 400 }))
++      .mockResolvedValueOnce(response({ choices: [{ message: { content: 'recovered' }, finish_reason: 'stop' }] }));
++    vi.stubGlobal('fetch', retryFetch);
++    const legacy = backbone({ model: 'gpt-5.4' });
++    legacy.setRetryConfig(2, 0);
++    await expect(legacy.prompt('retry legacy')).resolves.toBe('recovered');
++    expect(retryFetch).toHaveBeenCalledTimes(2);
++  });
++
++  it('maps native tool calls to call_id and replays the encrypted reasoning group and assistant phase', async () => {
++    const fetch = vi.fn()
++      .mockResolvedValueOnce(response(toolResponse()))
++      .mockResolvedValueOnce(response({
++        id: 'resp_final', status: 'completed', model: 'gpt-6.1-sol',
++        output: [{ type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: 'done' }] }],
++        usage: { input_tokens: 40, output_tokens: 3, total_tokens: 43 },
++      }));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    const first = await llm.chatWithTools([{ role: 'user', content: 'probe' }], [tool]);
++
++    expect(first.content).toBe('Inspect the scoped target.');
++    expect(first.toolCalls).toEqual([{ id: 'call_native_1', name: 'http_probe', arguments: { url: 'https://lab.example' } }]);
++    expect(first.finishReason).toBe('tool_calls');
++    expect(first.usage).toEqual({ promptTokens: 23, completionTokens: 6, totalTokens: 29 });
++    expect(JSON.stringify(first)).not.toContain('encrypted-reasoning-1');
++    const firstBody = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as { tools: Array<Record<string, unknown>> };
++    expect(firstBody.tools).toEqual([{
++      type: 'function', name: 'http_probe', description: 'Probe an in-scope URL', parameters: tool.parameters, strict: false,
++    }]);
++
++    const messages: LLMMessage[] = [
++      { role: 'user', content: 'probe' },
++      { role: 'assistant', content: first.content, toolCalls: first.toolCalls },
++      { role: 'tool', toolCallId: 'call_native_1', name: 'http_probe', content: '200 OK' },
++      { role: 'user', content: 'summarize' },
++    ];
++    const second = await llm.chatWithTools(messages, [tool]);
++    expect(second.content).toBe('done');
++
++    const replay = JSON.parse(String(fetch.mock.calls[1]?.[1]?.body)) as { input: Array<Record<string, unknown>> };
++    expect(replay.input).toContainEqual({ id: 'rs_call_native_1', type: 'reasoning', encrypted_content: 'encrypted-reasoning-1' });
++    expect(replay.input).toContainEqual(expect.objectContaining({ type: 'message', phase: 'commentary' }));
++    expect(replay.input).toContainEqual(expect.objectContaining({
++      id: 'fc_output_1', type: 'function_call', call_id: 'call_native_1', name: 'http_probe',
++    }));
++    expect(replay.input).toContainEqual({ type: 'function_call_output', call_id: 'call_native_1', output: '200 OK' });
++    expect(replay.input.filter(item => item.type === 'function_call' && item.call_id === 'call_native_1')).toHaveLength(1);
++    expect(JSON.stringify(replay)).not.toContain('tool_call_id');
++  });
++
++  it('maps only the verified local-agent bootstrap shape without requiring a native cache entry', async () => {
++    const bootstrapTool: LLMToolDefinition = {
++      name: 'port_scan', description: 'Scan allowed ports',
++      parameters: {
++        type: 'object',
++        properties: {
++          target: { type: 'string' }, ports: { type: 'string' }, timeout: { type: 'number' },
++        },
++        required: ['target', 'ports', 'timeout'],
++      },
++    };
++    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => response({
++      id: 'resp_bootstrap_followup', status: 'completed', model: 'gpt-6.1-sol',
++      output: [{ type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: 'Bootstrap included.' }] }],
++    }));
++    vi.stubGlobal('fetch', fetch);
++    const messages: LLMMessage[] = [
++      { role: 'system', content: 'Recon system prompt' },
++      { role: 'user', content: 'Scan the authorized target' },
++      {
++        role: 'assistant',
++        content: 'Running an initial low-noise recon check before planning deeper actions.',
++        toolCalls: [{ id: 'local-agent-bootstrap-1728340000000', name: 'port_scan', arguments: { target: 'lab.example', ports: '80,443', timeout: 2000 } }],
++      },
++      { role: 'tool', toolCallId: 'local-agent-bootstrap-1728340000000', name: 'port_scan', content: '80/tcp open' },
++      { role: 'user', content: 'Continue planning.' },
++    ];
++
++    const llm = backbone();
++    await llm.chatWithTools(messages, [bootstrapTool]);
++    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as { input: Array<Record<string, unknown>> };
++    expect(body.input).toContainEqual(expect.objectContaining({
++      type: 'function_call', call_id: 'local-agent-bootstrap-1728340000000', name: 'port_scan',
++    }));
++    expect(body.input).toContainEqual({
++      type: 'function_call_output', call_id: 'local-agent-bootstrap-1728340000000', output: '80/tcp open',
++    });
++    expect(body.input.some(item => item.type === 'reasoning')).toBe(false);
++
++    const unverified = structuredClone(messages);
++    const bootstrapCall = unverified.find(message => message.role === 'assistant')?.toolCalls?.[0];
++    const toolResult = unverified.find(message => message.role === 'tool');
++    if (!bootstrapCall || !toolResult || toolResult.role !== 'tool') throw new Error('Test bootstrap history is malformed');
++    bootstrapCall.id = 'synthetic-bootstrap-1728340000000';
++    toolResult.toolCallId = 'synthetic-bootstrap-1728340000000';
++    await expect(llm.chatWithTools(unverified, [bootstrapTool])).rejects.toMatchObject({ status: 422 });
++    expect(fetch).toHaveBeenCalledTimes(1);
++  });
++
++  it.each([
++    { name: 'assistant text', mutate: (messages: LLMMessage[]) => { assistantMessage(messages).content = 'altered'; } },
++    { name: 'call name', mutate: (messages: LLMMessage[]) => { const call = assistantMessage(messages).toolCalls?.[0]; if (call) call.name = 'other_tool'; } },
++    { name: 'call arguments', mutate: (messages: LLMMessage[]) => { const call = assistantMessage(messages).toolCalls?.[0]; if (call) call.arguments.url = 'https://other.example'; } },
++    { name: 'call id set', mutate: (messages: LLMMessage[]) => { const call = assistantMessage(messages).toolCalls?.[0]; if (call) call.id = 'call_other'; } },
++  ])('rejects replay when supplied $name does not match the cached group', async ({ mutate }) => {
++    const fetch = vi.fn().mockResolvedValue(response(toolResponse()));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    const first = await llm.chatWithTools([{ role: 'user', content: 'probe' }], [tool]);
++    const messages: LLMMessage[] = [
++      { role: 'user', content: 'probe' },
++      { role: 'assistant', content: first.content, toolCalls: structuredClone(first.toolCalls) },
++    ];
++    mutate(messages);
++
++    await expect(llm.chatWithTools(messages, [tool])).rejects.toMatchObject({ status: 422 });
++    expect(fetch).toHaveBeenCalledTimes(1);
++  });
++
++  it('keeps the private cached arguments separate from the returned mutable tool call', async () => {
++    const fetch = vi.fn()
++      .mockResolvedValueOnce(response(toolResponse()))
++      .mockResolvedValue(response({
++        id: 'resp_should_not_run', status: 'completed', model: 'gpt-6.1-sol',
++        output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'unexpected' }] }],
++      }));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    const first = await llm.chatWithTools([{ role: 'user', content: 'probe' }], [tool]);
++    const call = first.toolCalls?.[0];
++    if (!call) throw new Error('Expected a native tool call');
++    call.arguments.url = 'https://tampered.example';
++
++    await expect(llm.chatWithTools([
++      { role: 'user', content: 'probe' },
++      { role: 'assistant', content: first.content, toolCalls: first.toolCalls },
++    ], [tool])).rejects.toMatchObject({ status: 422 });
++    expect(fetch).toHaveBeenCalledTimes(1);
++  });
++
++  it('rejects a native continuation transplanted into a different conversation history', async () => {
++    const fetch = vi.fn().mockResolvedValue(response(toolResponse()));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    const first = await llm.chatWithTools([{ role: 'user', content: 'conversation alpha' }], [tool]);
++
++    await expect(llm.chatWithTools([
++      { role: 'user', content: 'conversation beta' },
++      { role: 'assistant', content: first.content, toolCalls: structuredClone(first.toolCalls) },
++    ], [tool])).rejects.toMatchObject({ status: 422 });
++    expect(fetch).toHaveBeenCalledTimes(1);
++  });
++
++  it('rejects malformed function arguments and incomplete calls before they can be returned for execution', async () => {
++    const fetch = vi.fn()
++      .mockResolvedValueOnce(response(toolResponse({ argumentsText: '{not-json' })))
++      .mockResolvedValueOnce(response({
++        id: 'resp_incomplete', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
++        output: [{ type: 'function_call', status: 'completed', call_id: 'call_incomplete', name: 'http_probe', arguments: '{"url":"https://lab.example"}' }],
++      }));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    llm.setRetryConfig(3, 0);
++
++    await expect(llm.chatWithTools([{ role: 'user', content: 'bad arguments' }], [tool])).rejects.toMatchObject({ status: 422 });
++    await expect(llm.chatWithTools([{ role: 'user', content: 'incomplete' }], [tool])).rejects.toMatchObject({ status: 422 });
++    expect(fetch).toHaveBeenCalledTimes(2);
++  });
++
++  it('rejects empty completed or incomplete output and marks nonempty incomplete text as truncated', async () => {
++    const fetch = vi.fn()
++      .mockResolvedValueOnce(response({ id: 'resp_empty', status: 'completed', output: [] }))
++      .mockResolvedValueOnce(response({ id: 'resp_empty_incomplete', status: 'incomplete', output: [] }))
++      .mockResolvedValueOnce(response({
++        id: 'resp_partial', status: 'incomplete', model: 'gpt-6.1-sol',
++        output: [{ type: 'message', role: 'assistant', status: 'incomplete', content: [{ type: 'output_text', text: 'partial but useful' }] }],
++      }));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++
++    await expect(llm.chat([{ role: 'user', content: 'empty completed' }])).rejects.toMatchObject({ status: 422, upstreamCode: 'empty_response' });
++    await expect(llm.chat([{ role: 'user', content: 'empty incomplete' }])).rejects.toMatchObject({ status: 422, upstreamCode: 'incomplete_response' });
++    const partial = await llm.chat([{ role: 'user', content: 'partial' }]);
++    expect(partial).toMatchObject({ content: 'partial but useful', finishReason: 'length' });
++    expect(partial.toolCalls).toBeUndefined();
++  });
++
++  it('returns refusal text without creating an executable call', async () => {
++    const fetch = vi.fn().mockResolvedValue(response({
++      id: 'resp_refusal', status: 'completed', model: 'gpt-6.1-sol',
++      output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'refusal', refusal: 'I cannot assist with that request.' }] }],
++    }));
++    vi.stubGlobal('fetch', fetch);
++
++    const result = await backbone().chatWithTools([{ role: 'user', content: 'test' }], [tool]);
++    expect(result.content).toContain('I cannot assist');
++    expect(result.finishReason).toBe('refusal');
++    expect(result.toolCalls).toBeUndefined();
++  });
++
++  it('keeps concurrent histories bound to their own encrypted continuation items', async () => {
++    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
++      const body = JSON.parse(String(init?.body)) as { input: Array<Record<string, unknown>> };
++      const seed = String(body.input.find(item => item.role === 'user')?.content || 'unknown');
++      const continuation = body.input.some(item => item.type === 'function_call_output');
++      if (continuation) {
++        return response({
++          id: `resp_${seed}_final`, status: 'completed', model: 'gpt-6.1-sol',
++          output: [{ type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: `${seed} done` }] }],
++        });
++      }
++      return response(toolResponse({
++        callId: `call_${seed}`, outputId: `item_${seed}`, encryptedContent: `sealed_${seed}`,
++        assistantText: `Inspect ${seed}.`, argumentsText: `{"url":"https://${seed}.example"}`,
++      }));
++    });
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    const [alpha, beta] = await Promise.all([
++      llm.chatWithTools([{ role: 'user', content: 'alpha' }], [tool]),
++      llm.chatWithTools([{ role: 'user', content: 'beta' }], [tool]),
++    ]);
++    const makeHistory = (seed: string, result: typeof alpha): LLMMessage[] => [
++      { role: 'user', content: seed },
++      { role: 'assistant', content: result.content, toolCalls: result.toolCalls },
++      { role: 'tool', toolCallId: `call_${seed}`, name: 'http_probe', content: `${seed} result` },
++    ];
++
++    await Promise.all([
++      llm.chatWithTools(makeHistory('alpha', alpha), [tool]),
++      llm.chatWithTools(makeHistory('beta', beta), [tool]),
++    ]);
++    const replays = fetch.mock.calls.slice(2).map(([, init]) => JSON.parse(String(init?.body)) as { input: Array<Record<string, unknown>> });
++    expect(replays).toHaveLength(2);
++    expect(replays.at(0)?.input.some(item => item.encrypted_content === 'sealed_alpha')).toBe(true);
++    expect(replays.at(0)?.input.some(item => item.encrypted_content === 'sealed_beta')).toBe(false);
++    expect(replays.at(1)?.input.some(item => item.encrypted_content === 'sealed_beta')).toBe(true);
++    expect(replays.at(1)?.input.some(item => item.encrypted_content === 'sealed_alpha')).toBe(false);
++  });
++
++  it('does not repopulate continuation state after reset while a request is in flight', async () => {
++    let resolveResponse: ((value: Response) => void) | undefined;
++    const fetch = vi.fn(() => new Promise<Response>(resolve => { resolveResponse = resolve; }));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    const pending = llm.chatWithTools([{ role: 'user', content: 'reset me' }], [tool]);
++    await Promise.resolve();
++    llm.clearHistory();
++    if (!resolveResponse) throw new Error('Fetch did not start');
++    resolveResponse(response(toolResponse({ callId: 'call_reset' })));
++    await expect(pending).rejects.toMatchObject({ status: 422, upstreamCode: 'continuation_reset' });
++  });
++
++  it('enforces continuation cache size, isolates parallel histories, and clears state with history reset', async () => {
++    let sequence = 0;
++    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
++      const body = JSON.parse(String(init?.body)) as { input?: Array<{ role?: string; content?: string }> };
++      const seed = body.input?.find(item => item.role === 'user')?.content || 'unknown';
++      return response(toolResponse({ callId: `call_${seed}_${sequence++}`, encryptedContent: `sealed_${seed}` }));
++    });
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    const groups: Array<{ user: string; result: Awaited<ReturnType<typeof llm.chatWithTools>> }> = [];
++    for (let index = 0; index < 65; index++) {
++      const user = `group${index}`;
++      groups.push({ user, result: await llm.chatWithTools([{ role: 'user', content: user }], [tool]) });
 +    }
++    const oldestGroup = groups.at(0);
++    const newestGroup = groups.at(-1);
++    if (!oldestGroup || !newestGroup) throw new Error('Cache test did not create its expected groups');
++    const oldest: LLMMessage[] = [
++      { role: 'user', content: oldestGroup.user },
++      { role: 'assistant', content: oldestGroup.result.content, toolCalls: oldestGroup.result.toolCalls },
++    ];
++    await expect(llm.chatWithTools(oldest, [tool])).rejects.toMatchObject({ status: 422 });
 +
-     if (!actualProvider) {
-       const envProvider = process.env.TEMPEST_DEFAULT_PROVIDER?.trim();
-       if (envProvider) {
-@@ -1073,7 +1085,7 @@ class ConfigManager {
-       // Local inference is far slower than cloud APIs, so it must not inherit the cloud-tuned
-       // default timeout: floor it at 120s (matching the frontend llmTimeoutFor) and let the
-       // operator override via TEMPEST_LOCAL_TIMEOUT for very slow reasoning models.
--      timeout: actualProvider === 'local'
-+      timeout: hostedMode() ? Math.min(Number(this.config.get('timeout')) || 30000, 30000) : actualProvider === 'local'
-         ? ((): number => {
-             const parsed = Number(process.env.TEMPEST_LOCAL_TIMEOUT);
-             return Number.isFinite(parsed) && parsed > 0
-@@ -1081,7 +1093,7 @@ class ConfigManager {
-               : Math.max(Number(this.config.get('timeout')) || 0, 120000);
-           })()
-         : this.config.get('timeout'),
--      fallbackChain: this.buildFallbackChain(actualProvider),
-+      fallbackChain: hostedMode() ? [] : this.buildFallbackChain(actualProvider),
-     };
-   }
- 
-diff --git a/src/config/provider-models.ts b/src/config/provider-models.ts
-index 0d94597..05d701f 100644
---- a/src/config/provider-models.ts
-+++ b/src/config/provider-models.ts
-@@ -14,7 +14,7 @@ export interface ProviderModel {
- 
- type FetchLike = (
-   url: string,
--  init?: { headers?: Record<string, string>; signal?: AbortSignal },
-+  init?: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: 'error' | 'follow' | 'manual' },
- ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
- 
- const ANTHROPIC_VERSION = '2023-06-01';
-@@ -97,7 +97,7 @@ export async function listProviderModels(
-   }
- 
-   const signal = timeoutSignal(opts.timeoutMs ?? DEFAULT_MODEL_LIST_TIMEOUT_MS);
--  const res = await doFetch(url, { headers, signal });
-+  const res = await doFetch(url, { headers, signal, redirect: 'error' });
-   if (!res.ok) throw new Error(`model-list request failed: HTTP ${res.status}`);
-   return parseModelList(await res.json());
- }
++    const newest: LLMMessage[] = [
++      { role: 'user', content: newestGroup.user },
++      { role: 'assistant', content: newestGroup.result.content, toolCalls: newestGroup.result.toolCalls },
++    ];
++    const before = fetch.mock.calls.length;
++    await llm.chatWithTools(newest, [tool]);
++    const newestReplay = JSON.parse(String(fetch.mock.calls[before]?.[1]?.body));
++    expect(JSON.stringify(newestReplay)).toContain('sealed_group64');
++
++    llm.clearHistory();
++    await expect(llm.chatWithTools(newest, [tool])).rejects.toMatchObject({ status: 422 });
++    expect(fetch).toHaveBeenCalledTimes(before + 1);
++  });
++
++  it('rejects a required continuation group larger than one MiB and keeps caches per adapter', async () => {
++    const oversizedFetch = vi.fn().mockResolvedValue(response(toolResponse({ encryptedContent: 'x'.repeat(1_100_000) })));
++    vi.stubGlobal('fetch', oversizedFetch);
++    const first = backbone();
++    await expect(first.chatWithTools([{ role: 'user', content: 'oversize' }], [tool])).rejects.toMatchObject({ status: 422 });
++
++    oversizedFetch.mockResolvedValue(response(toolResponse({ callId: 'shared_call', encryptedContent: 'sealed_private' })));
++    const owner = backbone();
++    const group = await owner.chatWithTools([{ role: 'user', content: 'parallel' }], [tool]);
++    const other = backbone();
++    const callsBefore = oversizedFetch.mock.calls.length;
++    await expect(other.chatWithTools([
++      { role: 'user', content: 'parallel' },
++      { role: 'assistant', content: group.content, toolCalls: group.toolCalls },
++    ], [tool])).rejects.toMatchObject({ status: 422 });
++    expect(oversizedFetch).toHaveBeenCalledTimes(callsBefore);
++  });
++
++  it('keeps deterministic upstream 400 errors safe and does not retry them', async () => {
++    process.env.T3MP3ST_HOSTED = 'true';
++    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      error: { message: 'private provider detail', code: 'unsupported_parameter', param: 'max_tokens' },
++    }), { status: 400 }));
++    vi.stubGlobal('fetch', fetch);
++    const llm = backbone();
++    llm.setRetryConfig(3, 0);
++
++    await expect(llm.prompt('test')).rejects.toMatchObject({
++      status: 400, upstreamCode: 'unsupported_parameter', upstreamParam: 'max_tokens',
++    });
++    expect(fetch).toHaveBeenCalledTimes(1);
++  });
++});
 diff --git a/src/hosted-policy.ts b/src/hosted-policy.ts
 new file mode 100644
-index 0000000..0867158
+index 0000000..1fa9a0a
 --- /dev/null
 +++ b/src/hosted-policy.ts
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,323 @@
 +import type { NextFunction, Request, Response } from 'express';
 +import { readFile } from 'node:fs/promises';
 +import { join } from 'node:path';
@@ -661,6 +2028,16 @@ index 0000000..0867158
 +  return true;
 +}
 +
++export function hostedLlmReady(status: HostedRuntimeStatus | null): boolean {
++  if (status?.llm?.ready !== true) return false;
++  const smoke = status.llm.smoke as Record<string, unknown> | undefined;
++  return smoke?.enabled !== true || (smoke.complete === true && smoke.ok === true);
++}
++
++export function hostedHealthReady(status: HostedRuntimeStatus | null): boolean {
++  return hostedRuntimeReady(status) && hostedLlmReady(status);
++}
++
 +export async function readHostedRuntimeStatus(): Promise<HostedRuntimeStatus | null> {
 +  const stateDir = process.env.T3MP3ST_STATE_DIR;
 +  if (!stateDir) return null;
@@ -677,7 +2054,7 @@ index 0000000..0867158
 +  const persistenceFailed = hostedPersistenceFailed;
 +  return {
 +    schemaVersion: status.schemaVersion || 't3mp3st_runtime_status/v1',
-+    ready: hostedRuntimeReady(status) && !persistenceFailed,
++    ready: hostedHealthReady(status) && !persistenceFailed,
 +    readOnly: status.readOnly || persistenceFailed,
 +    leaseExpiresAt: status.leaseExpiresAt ?? null,
 +    revision: status.revision ?? null,
@@ -702,6 +2079,7 @@ index 0000000..0867158
 +      readOnly: persistenceFailed ? true : status.persistence.readOnly ?? null,
 +      revision: status.persistence.revision ?? null,
 +      lastSyncAt: status.persistence.lastSyncAt ?? null,
++      claim: status.persistence.claim ?? null,
 +      leaseExpiresAt: status.persistence.leaseExpiresAt ?? null,
 +      privateReadCheck: status.persistence.privateReadCheck && typeof status.persistence.privateReadCheck === 'object'
 +        ? {
@@ -733,197 +2111,387 @@ index 0000000..0867158
 +    next(error);
 +  }
 +}
-diff --git a/src/llm/index.ts b/src/llm/index.ts
-index 518c2cb..f3f468c 100755
---- a/src/llm/index.ts
-+++ b/src/llm/index.ts
-@@ -20,6 +20,7 @@ import { tmpdir } from 'os';
- import { join } from 'path';
- import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
- import { config } from '../config/index.js';
-+import { hostedMode } from '../hosted-policy.js';
- import { localAgentChat } from '../agent/local-agents.js';
- import { fetchBypassingProxy } from '../net/proxy.js';
- import { enforceToolCallBoundary } from './tool-call-boundary.js';
-@@ -62,7 +63,7 @@ export interface ChatOptions {
-   systemPrompt?: string;
-   /** Tool definitions for function calling */
-   tools?: LLMToolDefinition[];
--  /** External cancellation — honored by adapters whose backend supports mid-flight abort (currently LocalAdapter). */
-+  /** External cancellation; hosted requests combine this with a total request deadline. */
-   signal?: AbortSignal;
- }
- 
-@@ -72,12 +73,16 @@ export interface ChatOptions {
- export class LLMApiError extends Error {
-   status: number;
-   retryAfterMs?: number;
-+  upstreamCode?: string;
-+  upstreamParam?: string;
- 
--  constructor(message: string, status: number, retryAfterMs?: number) {
-+  constructor(message: string, status: number, retryAfterMs?: number, upstreamCode?: string, upstreamParam?: string) {
-     super(message);
-     this.name = 'LLMApiError';
-     this.status = status;
-     this.retryAfterMs = retryAfterMs;
-+    this.upstreamCode = upstreamCode;
-+    this.upstreamParam = upstreamParam;
-   }
- }
- 
-@@ -115,7 +120,21 @@ function estimateTokens(messages: LLMMessage[]): number {
-   return Math.ceil(chars / 4);
- }
- 
--async function throttleLLMRequest(messages: LLMMessage[]): Promise<void> {
-+async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-+  if (!signal) return new Promise(resolve => setTimeout(resolve, ms));
-+  if (signal.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? 'LLM request timed out' : 'LLM request aborted');
-+  await new Promise<void>((resolve, reject) => {
-+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
-+    const onAbort = () => {
-+      clearTimeout(timer);
-+      signal.removeEventListener('abort', onAbort);
-+      reject(new Error(signal.reason?.name === 'TimeoutError' ? 'LLM request timed out' : 'LLM request aborted'));
-+    };
-+    signal.addEventListener('abort', onAbort, { once: true });
-+  });
+diff --git a/src/llm/openai-responses.ts b/src/llm/openai-responses.ts
+new file mode 100644
+index 0000000..847666a
+--- /dev/null
++++ b/src/llm/openai-responses.ts
+@@ -0,0 +1,375 @@
++import { createHash } from 'node:crypto';
++import type { LLMMessage, LLMResponse, LLMToolCall, LLMToolDefinition } from '../types/index.js';
++import { enforceToolCallBoundary, ToolCallBoundaryError } from './tool-call-boundary.js';
++
++const MAX_CONTINUATION_GROUPS = 64;
++const MAX_CONTINUATION_BYTES = 1024 * 1024;
++
++type JsonRecord = Record<string, unknown>;
++type ResponsesInputItem = JsonRecord;
++
++interface CachedCall {
++  id: string;
++  name: string;
++  arguments: Record<string, unknown>;
 +}
 +
-+async function throttleLLMRequest(messages: LLMMessage[], signal?: AbortSignal): Promise<void> {
-   const tpmLimit = Number(process.env.T3MP3ST_LLM_TPM_LIMIT || '0');
-   const minInterval = Number(process.env.T3MP3ST_LLM_MIN_INTERVAL_MS || '0');
-   const maxWait = Number(process.env.T3MP3ST_LLM_MAX_WAIT_MS || (5 * 60 * 1000));
-@@ -126,6 +145,7 @@ async function throttleLLMRequest(messages: LLMMessage[]): Promise<void> {
-   const deadline = now + maxWait;
- 
-   while (Date.now() < deadline) {
-+    if (signal?.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? 'LLM request timed out' : 'LLM request aborted');
-     const cut = Date.now() - throttleWindowMs;
-     for (let i = throttleState.length - 1; i >= 0; i--) {
-       if (throttleState[i].at < cut) throttleState.splice(i, 1);
-@@ -138,7 +158,7 @@ async function throttleLLMRequest(messages: LLMMessage[]): Promise<void> {
-       throttleState.push({ at: Date.now(), tokens: requested });
-       return;
-     }
--    await new Promise(resolve => setTimeout(resolve, 500));
-+    await abortableDelay(500, signal);
-   }
-   throttleState.push({ at: Date.now(), tokens: requested });
- }
-@@ -696,7 +716,9 @@ class OpenAIAdapter implements LLMProviderAdapter {
-     const requestBody: Record<string, unknown> = {
-       model: this.config.model,
-       messages: this.formatMessages(messages),
--      max_tokens: options?.maxTokens || this.config.maxTokens || 4096,
-+      max_tokens: hostedMode()
-+        ? Math.min(options?.maxTokens || this.config.maxTokens || 4096, 1024)
-+        : (options?.maxTokens || this.config.maxTokens || 4096),
-       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-       top_p: options?.topP,
-       stop: options?.stopSequences,
-@@ -711,20 +733,35 @@ class OpenAIAdapter implements LLMProviderAdapter {
- 
-     const response = await fetch(url, {
-       method: 'POST',
-+      ...(hostedMode() ? { redirect: 'error' as const } : {}),
-       headers: {
-         'Content-Type': 'application/json',
-         Authorization: `Bearer ${this.config.apiKey}`,
-       },
-       body: JSON.stringify(requestBody),
--      signal: AbortSignal.timeout(this.config.timeout || 60000),
-+      signal: options?.signal
-+        ? AbortSignal.any([options.signal, AbortSignal.timeout(this.config.timeout || 60000)])
-+        : AbortSignal.timeout(this.config.timeout || 60000),
-     });
- 
-     if (!response.ok) {
--      const errorText = await response.text();
-       const retryAfter = response.headers?.get?.('retry-after');
-       const retryAfterMs = retryAfter && /^\d+$/.test(retryAfter)
-         ? Number(retryAfter) * 1000
-         : undefined;
-+      if (hostedMode()) {
-+        let upstreamCode: string | undefined;
-+        let upstreamParam: string | undefined;
-+        try {
-+          const payload = await response.json() as { error?: { code?: unknown; param?: unknown } };
-+          const safeIdentifier = (value: unknown): string | undefined =>
-+            typeof value === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(value) ? value : undefined;
-+          upstreamCode = safeIdentifier(payload.error?.code);
-+          upstreamParam = safeIdentifier(payload.error?.param);
-+        } catch { /* never reflect provider error bodies */ }
-+        throw new LLMApiError(`OpenAI-compatible API error: ${response.status}`, response.status, retryAfterMs, upstreamCode, upstreamParam);
++interface ContinuationGroup {
++  key: string;
++  conversationKey: string;
++  assistantContent: string;
++  calls: CachedCall[];
++  items: ResponsesInputItem[];
++  bytes: number;
++}
++
++const LOCAL_AGENT_BOOTSTRAP_TEXT = 'Running an initial low-noise recon check before planning deeper actions.';
++const VALID_ASSISTANT_PHASES = new Set(['commentary', 'final_answer']);
++
++export class OpenAIResponsesPayloadError extends Error {
++  constructor(message: string, public readonly code = 'invalid_tool_call', public readonly param = 'output') {
++    super(message);
++    this.name = 'OpenAIResponsesPayloadError';
++  }
++}
++
++export interface OpenAIResponsesInputLease {
++  input: ResponsesInputItem[];
++  generation: number;
++  conversationKey: string;
++  pinnedKeys: string[];
++  release(): void;
++}
++
++function isRecord(value: unknown): value is JsonRecord {
++  return value !== null && typeof value === 'object' && !Array.isArray(value);
++}
++
++function stableJson(value: unknown): string {
++  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
++  if (isRecord(value)) {
++    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
++  }
++  return JSON.stringify(value);
++}
++
++function callKey(ids: readonly string[]): string {
++  return JSON.stringify([...ids].sort());
++}
++
++function conversationKey(messages: readonly LLMMessage[]): string {
++  const prefix: Array<[string, string]> = [];
++  for (const message of messages) {
++    if (message.role === 'system') prefix.push(['system', message.content]);
++    else if (message.role === 'user') {
++      prefix.push(['user', message.content]);
++      break;
++    }
++  }
++  return createHash('sha256').update(JSON.stringify(prefix)).digest('hex');
++}
++
++function safePhase(value: unknown): string | undefined {
++  return typeof value === 'string' && VALID_ASSISTANT_PHASES.has(value) ? value : undefined;
++}
++
++function replayItems(output: unknown[]): ResponsesInputItem[] {
++  const items: ResponsesInputItem[] = [];
++  for (const raw of output) {
++    if (!isRecord(raw)) continue;
++    if (raw.type === 'reasoning' && typeof raw.encrypted_content === 'string' && raw.encrypted_content) {
++      items.push({
++        ...(typeof raw.id === 'string' ? { id: raw.id } : {}),
++        type: 'reasoning',
++        encrypted_content: raw.encrypted_content,
++      });
++    } else if (raw.type === 'message') {
++      const content = Array.isArray(raw.content)
++        ? raw.content.filter(isRecord).flatMap(part =>
++            part.type === 'output_text' && typeof part.text === 'string'
++              ? [{ type: 'output_text', text: part.text }]
++              : [])
++        : [];
++      items.push({
++        ...(typeof raw.id === 'string' ? { id: raw.id } : {}),
++        type: 'message',
++        role: 'assistant',
++        ...(raw.status === 'completed' ? { status: 'completed' } : {}),
++        ...(safePhase(raw.phase) ? { phase: safePhase(raw.phase) } : {}),
++        content,
++      });
++    } else if (raw.type === 'function_call') {
++      if (typeof raw.call_id !== 'string' || !raw.call_id || typeof raw.name !== 'string' || typeof raw.arguments !== 'string') {
++        throw new OpenAIResponsesPayloadError('GPT-6 Responses returned a malformed function call');
 +      }
-+      const errorText = await response.text();
-       throw new LLMApiError(`OpenAI-compatible API error: ${response.status} - ${errorText}`, response.status, retryAfterMs);
-     }
- 
-@@ -1746,8 +1783,20 @@ constructor(config: LLMConfig) {
-   ): Promise<LLMResponse> {
-     const startTime = Date.now();
-     this.emit('request:start', { messages });
-+    let effectiveOptions = options;
-+    if (hostedMode()) {
-+      const totalDeadline = AbortSignal.timeout(30_000);
-+      const signal = options?.signal ? AbortSignal.any([options.signal, totalDeadline]) : totalDeadline;
-+      effectiveOptions = { ...options, signal };
++      items.push({
++        ...(typeof raw.id === 'string' ? { id: raw.id } : {}),
++        type: 'function_call',
++        ...(raw.status === 'completed' ? { status: 'completed' } : {}),
++        call_id: raw.call_id,
++        name: raw.name,
++        arguments: raw.arguments,
++      });
 +    }
- 
--    await throttleLLMRequest(messages);
++  }
++  return items;
++}
++
++function outputTextAndRefusal(output: unknown[]): { text: string; refusal: boolean } {
++  const text: string[] = [];
++  let refusal = false;
++  for (const raw of output) {
++    if (!isRecord(raw)) continue;
++    if (raw.type === 'message' && Array.isArray(raw.content)) {
++      for (const part of raw.content) {
++        if (!isRecord(part)) continue;
++        if (part.type === 'output_text' && typeof part.text === 'string') text.push(part.text);
++        if (part.type === 'refusal' && typeof part.refusal === 'string') {
++          text.push(part.refusal);
++          refusal = true;
++        }
++      }
++    } else if (raw.type === 'refusal' && typeof raw.refusal === 'string') {
++      text.push(raw.refusal);
++      refusal = true;
++    }
++  }
++  return { text: text.join(''), refusal };
++}
++
++function safeUsage(value: unknown): LLMResponse['usage'] {
++  if (!isRecord(value)) return undefined;
++  const input = typeof value.input_tokens === 'number' && Number.isFinite(value.input_tokens) ? value.input_tokens : undefined;
++  const output = typeof value.output_tokens === 'number' && Number.isFinite(value.output_tokens) ? value.output_tokens : undefined;
++  if (input === undefined || output === undefined) return undefined;
++  const total = typeof value.total_tokens === 'number' && Number.isFinite(value.total_tokens)
++    ? value.total_tokens
++    : input + output;
++  return { promptTokens: input, completionTokens: output, totalTokens: total };
++}
++
++export class OpenAIResponsesContinuationCache {
++  private readonly entries = new Map<string, ContinuationGroup>();
++  private readonly activePins = new Map<string, number>();
++  private generation = 0;
++  private byteSize = 0;
++
++  clear(): void {
++    this.generation++;
++    this.entries.clear();
++    this.activePins.clear();
++    this.byteSize = 0;
++  }
++
++  prepareInput(messages: LLMMessage[], tools?: readonly LLMToolDefinition[]): OpenAIResponsesInputLease {
++    const input: ResponsesInputItem[] = [];
++    const pinnedKeys: string[] = [];
++    const replayedKeys = new Set<string>();
++    const seenCalls = new Set<string>();
++    const resolvedGroups = new Map<LLMMessage, ContinuationGroup>();
++    const syntheticGroups = new Map<LLMMessage, ResponsesInputItem[]>();
++    const historyKey = conversationKey(messages);
++    const referencedKeys = new Set(messages.flatMap(message =>
++      message.role === 'assistant' && message.toolCalls?.length
++        ? [callKey(message.toolCalls.map(call => call.id))]
++        : []));
++
++    // Prune abandoned branches for this conversation while preserving entries
++    // pinned by in-flight requests and histories with a different conversation key.
++    for (const [key, group] of this.entries) {
++      if (group.conversationKey === historyKey && !referencedKeys.has(key) && !this.activePins.has(key)) {
++        this.entries.delete(key);
++        this.byteSize -= group.bytes;
++      }
++    }
++
++    for (const message of messages) {
++      if (message.role !== 'assistant' || !message.toolCalls?.length) continue;
++      const ids = message.toolCalls.map(call => call.id);
++      if (ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length) {
++        throw new OpenAIResponsesPayloadError('GPT-6 Responses continuation has invalid call IDs');
++      }
++      const key = callKey(ids);
++      if (replayedKeys.has(key)) throw new OpenAIResponsesPayloadError('GPT-6 Responses continuation group was repeated');
++      const group = this.entries.get(key);
++      if (group && group.conversationKey === historyKey && group.assistantContent === message.content
++        && this.matchesCalls(group.calls, message.toolCalls)) {
++        resolvedGroups.set(message, group);
++        pinnedKeys.push(key);
++        // Touch the entry in the bounded LRU without exposing its contents.
++        this.entries.delete(key);
++        this.entries.set(key, group);
++      } else {
++        const items = this.syntheticBootstrapItems(message, tools);
++        if (!items) throw new OpenAIResponsesPayloadError('GPT-6 Responses continuation is unavailable or does not match the supplied assistant turn');
++        syntheticGroups.set(message, items);
++      }
++      replayedKeys.add(key);
++    }
++
++    for (const message of messages) {
++      if (message.role === 'assistant' && message.toolCalls?.length) {
++        const items = resolvedGroups.get(message)?.items ?? syntheticGroups.get(message);
++        if (!items) throw new OpenAIResponsesPayloadError('GPT-6 Responses continuation is unavailable');
++        for (const item of items) {
++          input.push({ ...item });
++          if (item.type === 'function_call' && typeof item.call_id === 'string') seenCalls.add(item.call_id);
++        }
++      } else if (message.role === 'tool') {
++        if (!message.toolCallId || !seenCalls.has(message.toolCallId)) {
++          throw new OpenAIResponsesPayloadError('GPT-6 Responses tool result does not match a replayed function call');
++        }
++        input.push({ type: 'function_call_output', call_id: message.toolCallId, output: message.content });
++      } else {
++        input.push({ role: message.role, content: message.content });
++      }
++    }
++
++    const leaseGeneration = this.generation;
++    for (const key of pinnedKeys) this.activePins.set(key, (this.activePins.get(key) || 0) + 1);
++    let released = false;
++    return {
++      input,
++      generation: leaseGeneration,
++      conversationKey: historyKey,
++      pinnedKeys,
++      release: () => {
++        if (released) return;
++        released = true;
++        if (this.generation !== leaseGeneration) return;
++        for (const key of pinnedKeys) {
++          const next = (this.activePins.get(key) || 0) - 1;
++          if (next > 0) this.activePins.set(key, next);
++          else this.activePins.delete(key);
++        }
++      },
++    };
++  }
++
++  parseResponse(data: unknown, model: string, tools: readonly LLMToolDefinition[] | undefined, lease: OpenAIResponsesInputLease): LLMResponse {
++    if (!isRecord(data) || (data.status !== 'completed' && data.status !== 'incomplete') || !Array.isArray(data.output)) {
++      throw new OpenAIResponsesPayloadError('GPT-6 Responses returned an incomplete or malformed response', 'incomplete_response', 'status');
++    }
++
++    const rawCalls = data.output.filter((item): item is JsonRecord => isRecord(item) && item.type === 'function_call');
++    const { text: content, refusal } = outputTextAndRefusal(data.output);
++    if (data.status === 'incomplete') {
++      if (rawCalls.length) throw new OpenAIResponsesPayloadError('GPT-6 Responses returned an incomplete function-call group', 'incomplete_response', 'status');
++      if (!content.trim()) throw new OpenAIResponsesPayloadError('GPT-6 Responses returned empty incomplete output', 'incomplete_response', 'output');
++      return {
++        content,
++        model: typeof data.model === 'string' ? data.model : model,
++        finishReason: 'length',
++        usage: safeUsage(data.usage),
++      };
++    }
++    if (!content.trim() && rawCalls.length === 0) {
++      throw new OpenAIResponsesPayloadError('GPT-6 Responses returned empty completed output', 'empty_response', 'output');
++    }
++    if (refusal && rawCalls.length) throw new OpenAIResponsesPayloadError('GPT-6 Responses returned a refusal with a function call');
++
++    let toolCalls: LLMToolCall[] | undefined;
++    if (rawCalls.length) {
++      if (lease.generation !== this.generation) throw new OpenAIResponsesPayloadError('GPT-6 Responses continuation was reset before completion', 'continuation_reset', 'output');
++      if (!tools?.length) throw new OpenAIResponsesPayloadError('GPT-6 Responses returned a function call without offered tools');
++      const seenCallIds = new Set<string>();
++      const boundaryCalls = rawCalls.map(call => {
++        if (typeof call.call_id !== 'string' || !call.call_id || seenCallIds.has(call.call_id)
++          || typeof call.name !== 'string' || typeof call.arguments !== 'string'
++          || (call.status !== undefined && call.status !== 'completed')) {
++          throw new OpenAIResponsesPayloadError('GPT-6 Responses returned a malformed function call');
++        }
++        seenCallIds.add(call.call_id);
++        return { id: call.call_id, name: call.name, arguments: call.arguments };
++      });
++      try {
++        toolCalls = enforceToolCallBoundary(JSON.stringify({ tool_calls: boundaryCalls }), tools).calls;
++      } catch (error) {
++        if (error instanceof ToolCallBoundaryError) {
++          throw new OpenAIResponsesPayloadError('GPT-6 Responses returned a function call outside the offered tool contract');
++        }
++        throw error;
++      }
++      if (!toolCalls?.length) throw new OpenAIResponsesPayloadError('GPT-6 Responses returned an empty function-call group');
++
++      const items = replayItems(data.output);
++      const replayedCalls = items.filter(item => item.type === 'function_call');
++      if (replayedCalls.length !== toolCalls.length) throw new OpenAIResponsesPayloadError('GPT-6 Responses function-call group could not be replayed');
++      const key = callKey(toolCalls.map(call => call.id));
++      if (this.entries.has(key)) throw new OpenAIResponsesPayloadError('GPT-6 Responses reused a native call ID');
++      const group: ContinuationGroup = {
++        key,
++        conversationKey: lease.conversationKey,
++        assistantContent: content,
++        calls: toolCalls.map(call => ({ id: call.id, name: call.name, arguments: structuredClone(call.arguments) })),
++        items,
++        bytes: 0,
++      };
++      group.bytes = new TextEncoder().encode(JSON.stringify(group)).byteLength;
++      if (group.bytes > MAX_CONTINUATION_BYTES) throw new OpenAIResponsesPayloadError('GPT-6 Responses continuation group exceeds the private cache limit');
++      this.makeRoom(group.bytes, lease.pinnedKeys);
++      this.entries.set(key, group);
++      this.byteSize += group.bytes;
++    }
++
++    const refusalFinish = refusal || rawCalls.some(call => call.type === 'refusal');
++    const result: LLMResponse = {
++      content,
++      model: typeof data.model === 'string' ? data.model : model,
++      finishReason: refusalFinish ? 'refusal' : toolCalls?.length ? 'tool_calls' : 'stop',
++      toolCalls,
++      usage: safeUsage(data.usage),
++    };
++    return result;
++  }
++
++  private matchesCalls(cached: CachedCall[], supplied: LLMToolCall[]): boolean {
++    if (cached.length !== supplied.length) return false;
++    const byId = new Map(cached.map(call => [call.id, call]));
++    return supplied.every(call => {
++      const previous = byId.get(call.id);
++      return previous !== undefined && previous.name === call.name
++        && stableJson(previous.arguments) === stableJson(call.arguments);
++    });
++  }
++
++  private syntheticBootstrapItems(message: LLMMessage, tools?: readonly LLMToolDefinition[]): ResponsesInputItem[] | undefined {
++    const calls = message.toolCalls;
++    if (message.content !== LOCAL_AGENT_BOOTSTRAP_TEXT || calls?.length !== 1) return undefined;
++    const call = calls[0];
++    if (!call) return undefined;
++    if (!/^local-agent-bootstrap-\d+$/.test(call.id) || !tools?.length) return undefined;
 +    try {
-+      await throttleLLMRequest(messages, effectiveOptions?.signal);
-+    } catch (error) {
-+      const failure = error instanceof Error ? error : new Error('LLM request aborted');
-+      this.emit('request:error', { error: failure, messages });
-+      throw failure;
++      const validated = enforceToolCallBoundary(JSON.stringify({ tool_calls: [call] }), tools).calls;
++      if (!validated?.length) return undefined;
++      return [
++        {
++          type: 'message',
++          role: 'assistant',
++          status: 'completed',
++          content: [{ type: 'output_text', text: message.content }],
++        },
++        {
++          type: 'function_call',
++          status: 'completed',
++          call_id: call.id,
++          name: call.name,
++          arguments: JSON.stringify(call.arguments),
++        },
++      ];
++    } catch {
++      return undefined;
 +    }
- 
-     // The model ladder: primary first, then each configured fallback hop. A hop is
-     // tried when the rung above fails for ANY reason that model can't fix itself —
-@@ -1773,7 +1822,7 @@ constructor(config: LLMConfig) {
-       let response: LLMResponse | null = null;
-       for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
-         try {
--          response = await adapter.chat(msgs, options);
-+          response = await adapter.chat(msgs, effectiveOptions);
-           break;
-         } catch (error) {
-           lastError = error as Error;
-@@ -1790,7 +1839,7 @@ constructor(config: LLMConfig) {
-           const isLocalProvider = hop.provider === 'local' || hop.provider === 'local-agent';
-           const permanent = (error instanceof LLMApiError &&
-             (error.status === 401 || error.status === 403 || error.status === 404)) ||
--            !!options?.signal?.aborted ||
-+            !!effectiveOptions?.signal?.aborted ||
-             (isLocalProvider && classifyErrorKind(error as Error) === 'timeout');
-           if (permanent || attempt >= this.retryAttempts) break;
-           let delayMs = this.retryDelayMs * Math.pow(2, attempt - 1);
-@@ -1800,7 +1849,12 @@ constructor(config: LLMConfig) {
-             delayMs = Math.max(delayMs, Math.min(error.retryAfterMs, 120_000));
-           }
-           this.emit('request:retry', { attempt, maxAttempts: this.retryAttempts, error: lastError });
--          await new Promise(resolve => setTimeout(resolve, delayMs));
-+          try {
-+            await abortableDelay(delayMs, effectiveOptions?.signal);
-+          } catch (delayError) {
-+            lastError = delayError instanceof Error ? delayError : new Error('LLM request aborted');
-+            break;
-+          }
-         }
-       }
- 
-@@ -1811,7 +1865,7 @@ constructor(config: LLMConfig) {
-         reframeNext = false;
-         // An explicit cancellation means "stop", not "try a different model" — falling through to
-         // the next hop would silently start a fresh request the caller already asked to abandon.
--        if (hasNext && !options?.signal?.aborted) {
-+        if (hasNext && !effectiveOptions?.signal?.aborted) {
-           this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model, engaged: true, reason });
-           continue;
-         }
++  }
++
++  private makeRoom(bytes: number, currentRequestKeys: readonly string[]): void {
++    const protectedKeys = new Set([...currentRequestKeys, ...this.activePins.keys()]);
++    while (this.entries.size + 1 > MAX_CONTINUATION_GROUPS || this.byteSize + bytes > MAX_CONTINUATION_BYTES) {
++      const candidate = [...this.entries.entries()].find(([key]) => !protectedKeys.has(key) && !this.activePins.has(key));
++      if (!candidate) throw new OpenAIResponsesPayloadError('GPT-6 Responses continuation cache cannot retain the required history');
++      const [key, removed] = candidate;
++      this.entries.delete(key);
++      this.byteSize -= removed.bytes;
++    }
++  }
++}
 diff --git a/src/persistence/atomic-state.ts b/src/persistence/atomic-state.ts
 new file mode 100644
 index 0000000..3e674b9
@@ -1021,523 +2589,3 @@ index 0000000..3e674b9
 +    return true;
 +  });
 +}
-diff --git a/src/recon/whitebox.ts b/src/recon/whitebox.ts
-index bd34d93..3aaf816 100644
---- a/src/recon/whitebox.ts
-+++ b/src/recon/whitebox.ts
-@@ -49,6 +49,7 @@ import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node
- import { execFileSync } from 'node:child_process';
- import { homedir, tmpdir } from 'node:os';
- import { join as joinPath, isAbsolute, relative, resolve, sep } from 'node:path';
-+import { hostedMode, hostedChildEnvironment, HOSTED_OPENAI_BASE_URL } from '../hosted-policy.js';
- 
- /**
-  * Default worker-source token budget when building a source blob directly from a
-@@ -98,6 +99,7 @@ function isGitHubHttpsRepoUrl(input: string): boolean {
-     const url = new URL(input);
-     return url.protocol === 'https:' &&
-       url.hostname.toLowerCase() === 'github.com' &&
-+      !url.username && !url.password && !url.port && !url.search && !url.hash &&
-       /^\/[^/]+\/[^/]+(?:\.git)?\/?$/.test(url.pathname);
-   } catch {
-     return false;
-@@ -113,8 +115,8 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource
-     throw new RepoCloneError('repoUrl must be an https://github.com/<owner>/<repo> URL');
-   }
- 
--  const token = getGitHubRepoToken();
--  if (!token) {
-+  const token = hostedMode() ? undefined : getGitHubRepoToken();
-+  if (!token && !hostedMode()) {
-     throw new RepoCloneError('private GitHub repo scans require T3MP3ST_GITHUB_TOKEN or GITHUB_TOKEN');
-   }
- 
-@@ -143,11 +145,12 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource
-       cloneDir,
-     ], {
-       stdio: ['ignore', 'ignore', 'pipe'],
-+      ...(hostedMode() ? { timeout: 30_000, maxBuffer: 1024 * 1024 } : {}),
-       env: {
--        ...process.env,
-+        ...(hostedMode() ? hostedChildEnvironment() : process.env),
-         GIT_ASKPASS: askPassPath,
-         GIT_TERMINAL_PROMPT: '0',
--        T3MP3ST_GIT_TOKEN: token,
-+        ...(hostedMode() ? {} : { T3MP3ST_GIT_TOKEN: token }),
-       },
-     });
- 
-@@ -158,7 +161,7 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource
-     };
-   } catch (error) {
-     rmSync(tempRoot, { recursive: true, force: true });
--    const message = error instanceof Error ? error.message.replaceAll(token, '[REDACTED]') : 'git clone failed';
-+    const message = error instanceof Error ? (token ? error.message.replaceAll(token, '[REDACTED]') : error.message) : 'git clone failed';
-     throw new RepoCloneError(`GitHub repo clone failed: ${message}`);
-   }
- }
-@@ -195,7 +198,7 @@ export function resolveContainedRepoPath(input: unknown): string {
-   }
-   let root: string;
-   try {
--    root = realpathSync(resolve(process.env.T3MP3ST_REPO_ROOT || homedir()));
-+    root = realpathSync(resolve(process.env.T3MP3ST_REPO_ROOT || (hostedMode() ? '/tmp/t3mp3st-workspace' : homedir())));
-   } catch {
-     throw new RepoPathError('configured T3MP3ST_REPO_ROOT does not resolve to an existing path');
-   }
-@@ -286,7 +289,24 @@ export interface WhiteboxAnalysisResult {
-  *   TEMPEST_ORCHESTRATOR_PROVIDER / TEMPEST_ORCHESTRATOR_MODEL
-  *   TEMPEST_WORKER_PROVIDER       / TEMPEST_WORKER_MODEL
-  */
--function buildDecompositionConfig(): DecompositionConfig {
-+export function buildDecompositionConfig(): DecompositionConfig {
-+  if (hostedMode()) {
-+    const selectedModel = process.env.TEMPEST_OPENAI_MODEL || config.getLLMConfig('openai').model;
-+    const hostedModel = config.getLLMConfig('openai', selectedModel);
-+    if (hostedModel.baseUrl && hostedModel.baseUrl !== HOSTED_OPENAI_BASE_URL) {
-+      throw new Error('Hosted white-box analysis requires the canonical OpenAI endpoint');
-+    }
-+    return {
-+      orchestratorModel: hostedModel,
-+      workerModel: hostedModel,
-+      maxQueriesPerRound: 8,
-+      maxRounds: 5,
-+      workerMaxTokens: 512,
-+      orchestratorMaxTokens: 1024,
-+      parallelWorkers: true,
-+      maxConcurrency: 2,
-+    };
-+  }
-   const orchestratorProvider =
-     (process.env.TEMPEST_ORCHESTRATOR_PROVIDER as LLMProvider) || 'openrouter';
-   const workerProvider =
-diff --git a/src/server.ts b/src/server.ts
-index e9fbec0..0d7145d 100755
---- a/src/server.ts
-+++ b/src/server.ts
-@@ -12,12 +12,12 @@
- import express, { Request, Response, NextFunction } from 'express';
- import cors from 'cors';
- import { execFile, spawn } from 'child_process';
--import { appendFile, mkdir, readFile, writeFile } from 'fs/promises';
-+import { readFile } from 'fs/promises';
- import { join } from 'path';
- import { promisify } from 'util';
- import { createHash, randomUUID } from 'crypto';
- import { config, AVAILABLE_MODELS } from './config/index.js';
--import { resolveModels } from './config/provider-models.js';
-+import { listProviderModels, resolveModels } from './config/provider-models.js';
- import { initProxyFromConfig, configureProxy, getProxyStatus, checkIp, invalidateIpCache } from './net/proxy.js';
- import { redactString, redactLedgerText, redactSecrets } from './redact.js';
- import { LLMBackbone } from './llm/index.js';
-@@ -36,6 +36,8 @@ import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type O
- import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
- import { initGrammars } from './recon/ts-grammars.js';
- import { redactCredential } from './evidence/index.js';
-+import { hostedMode, hostedRuntimeReady, hostedRequestPolicy, hostedRequestBodyPolicy, hostedJsonError, hostedOriginAllowed, hostedSafeCommand, HOSTED_OPENAI_BASE_URL, readHostedRuntimeStatus, publicHostedRuntimeStatus, hostedChildEnvironment, markHostedPersistenceFailure, hasHostedPersistenceFailure } from './hosted-policy.js';
-+import { SerializedPersistenceQueue, isValidHostedStateSnapshot, unknownStateFields } from './persistence/atomic-state.js';
- 
- const execFileAsync = promisify(execFile);
- 
-@@ -183,6 +185,11 @@ const HOST = process.env.T3MP3ST_HOST || (process.env.DOCKER === 'true' ? '0.0.0
- const HOST_IS_LOOPBACK = /^(127\.|localhost$|::1$|\[::1\]$)/i.test(HOST.trim());
- 
- const app = express();
-+if (hostedMode()) app.set('case sensitive routing', true);
-+
-+// Hosted policy runs before CORS and body parsing so a foreign origin, bad Host,
-+// cross-site fetch, or exhausted request bucket is rejected before body work.
-+app.use(hostedRequestPolicy);
- 
- // --- Localhost origin allow-list ------------------------------------------
- // A request from the same-origin UI, curl, or the CLI is trusted; a request
-@@ -201,6 +208,7 @@ function isLoopbackHostname(host: string): boolean {
- }
- function isLoopbackOrigin(originHeader: string | undefined): boolean {
-   if (!originHeader) return false;
-+  if (hostedMode()) return hostedOriginAllowed(originHeader);
-   // B-01: the opaque origin "null" (sandboxed iframe, file://, some cross-origin
-   // redirects, data: documents) is deliberately NOT trusted — the UI is always
-   // http-served from 127.0.0.1, so a "null" Origin is a foreign/sandboxed caller,
-@@ -241,6 +249,7 @@ app.use(cors({
-   origin(origin, callback) {
-     // No Origin header (curl, CLI, server-to-server) → allow.
-     if (!origin) return callback(null, true);
-+    if (hostedMode()) return callback(null, hostedOriginAllowed(origin));
-     if (isLoopbackOrigin(origin)) return callback(null, true);
-     return callback(null, false);
-   },
-@@ -294,7 +303,7 @@ function isLoopbackHost(hostHeader: string | undefined): boolean {
-   }
-   return isLoopbackHostname(h);
- }
--if (HOST_IS_LOOPBACK) {
-+if (HOST_IS_LOOPBACK && !hostedMode()) {
-   app.use((req: Request, res: Response, next: NextFunction) => {
-     if (isLoopbackHost(req.headers.host)) return next();
-     res.status(403).json({
-@@ -304,7 +313,9 @@ if (HOST_IS_LOOPBACK) {
-   });
- }
- 
--app.use(express.json({ limit: '10mb' }));
-+app.use(express.json({ limit: hostedMode() ? '1mb' : '10mb' }));
-+app.use(hostedRequestBodyPolicy);
-+app.use(hostedJsonError);
- 
- // Request logging
- app.use((req: Request, _res: Response, next: NextFunction) => {
-@@ -320,7 +331,12 @@ let llm: LLMBackbone | null = null;
- 
- async function initLLM(): Promise<LLMBackbone | null> {
-   try {
--    const llmConfig = config.getLLMConfig();
-+    const configured = hostedMode() ? config.getLLMConfig('openai') : config.getLLMConfig();
-+    if (hostedMode() && configured.baseUrl && configured.baseUrl !== HOSTED_OPENAI_BASE_URL) {
-+      console.warn('[T3MP3ST] Hosted mode requires the canonical OpenAI provider and URL');
-+      return null;
-+    }
-+    const llmConfig = hostedMode() ? { ...configured, fallbackChain: [], timeout: Math.min(configured.timeout || 30_000, 30_000) } : configured;
-     if (providerNeedsApiKey(llmConfig.provider) && !llmConfig.apiKey) {
-       console.warn('[T3MP3ST] No API key configured - LLM features disabled');
-       return null;
-@@ -380,7 +396,8 @@ function createTempestCommandInstance(missionName: string, apiKey: string | unde
-       // llama.cpp / Ollama host). Never set it for cloud providers — that would
-       // let a request redirect a cloud call to an attacker-chosen endpoint.
-       ...(baseUrl && provider === 'local' ? { baseUrl } : {}),
--      maxTokens: 4096,
-+      maxTokens: hostedMode() ? 1024 : 4096,
-+      ...(hostedMode() ? { timeout: 30_000 } : {}),
-       temperature: 0.7,
-     },
-   });
-@@ -559,7 +576,7 @@ async function executeCommand(command: string, timeout = 30000): Promise<ToolRes
-     return { success: false, output: '', error: parsed.error, duration: 0 };
-   }
-   try {
--    const { stdout, stderr } = await execFileAsync(parsed.bin, parsed.args, { timeout, maxBuffer: 1024 * 1024 * 10 });
-+    const { stdout, stderr } = await execFileAsync(parsed.bin, parsed.args, { timeout, maxBuffer: 1024 * 1024 * 10, ...(hostedMode() ? { env: hostedChildEnvironment() } : {}) });
-     return { success: true, output: stdout || stderr, duration: Date.now() - startTime };
-   } catch (error: any) {
-     return { success: false, output: error.stdout || '', error: error.message, duration: Date.now() - startTime };
-@@ -1120,6 +1137,7 @@ function replaceMapContents<T extends { id: string }>(map: Map<string, T>, value
- 
- function buildStateSnapshot(): Record<string, unknown> {
-   return {
-+    ...restoredStateExtras,
-     schema_version: 't3mp3st_state/v1',
-     savedAt: nowIso(),
-     mode: currentMode(),
-@@ -1137,11 +1155,12 @@ function buildStateSnapshot(): Record<string, unknown> {
-   };
- }
- 
-+const persistenceQueue = new SerializedPersistenceQueue();
-+
- async function persistState(reason = 'state.updated'): Promise<void> {
-   const file = stateFilePath();
-   if (!file) return;
--  await mkdir(stateRoot(), { recursive: true });
--  await writeFile(file, JSON.stringify(redactSecrets({ ...buildStateSnapshot(), reason }), null, 2));
-+  await persistenceQueue.atomicWrite(file, JSON.stringify(redactSecrets({ ...buildStateSnapshot(), reason }), null, 2));
- }
- 
- // Debounced full-snapshot writer. persistState re-serializes the ENTIRE (growing) snapshot,
-@@ -1163,6 +1182,8 @@ function schedulePersist(reason: string): void {
-     if (!persistPending) return;
-     persistPending = false;
-     void persistState(persistReason).catch(error => {
-+      persistPending = true;
-+      markHostedPersistenceFailure();
-       console.warn(`[T3MP3ST] State persistence failed: ${error.message || error}`);
-     });
-   }, PERSIST_DEBOUNCE_MS);
-@@ -1172,27 +1193,45 @@ function schedulePersist(reason: string): void {
- // can't drop the last <1s of state on SIGTERM/SIGINT — Ctrl-C, docker stop, systemctl restart).
- // state.json is the only restore source, so this closes the data-loss gap the debounce opened.
- async function flushPersist(): Promise<void> {
--  if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
--  if (persistPending) {
--    persistPending = false;
--    await persistState(persistReason);
-+  for (;;) {
-+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
-+    if (persistPending) {
-+      persistPending = false;
-+      await persistState(persistReason);
-+    }
-+    await persistenceQueue.drain();
-+    if (!persistPending && !persistTimer) break;
-   }
- }
- 
- async function appendStateEvent(type: string, payload: Record<string, unknown>): Promise<void> {
-   const file = eventsFilePath();
-   if (!file) return;
--  await mkdir(stateRoot(), { recursive: true });
-   const event = redactSecrets({ ts: nowIso(), type, payload });
--  await appendFile(file, `${JSON.stringify(event)}\n`);
-+  await persistenceQueue.append(file, `${JSON.stringify(event)}\n`);
- }
- 
-+const STATE_SNAPSHOT_KEYS = new Set([
-+  'schema_version', 'savedAt', 'mode', 'reason',
-+  'missionDrafts', 'improvementProposals', 'approvalRequests', 'evidenceLedger',
-+  'findingsLedger', 'retestLedger', 'hypothesisLedger', 'workOrderLedger',
-+  'watchCycleLedger', 'memoryCapsule', 'memoryProposals',
-+]);
-+const restoredStateExtras: Record<string, unknown> = {};
-+
- async function loadPersistedState(): Promise<void> {
-   const file = stateFilePath();
-   if (!file) return;
-   try {
-     const raw = await readFile(file, 'utf8');
-     const state = JSON.parse(raw) as Record<string, unknown>;
-+    Object.assign(restoredStateExtras, unknownStateFields(state, STATE_SNAPSHOT_KEYS));
-+    if (hostedMode()) {
-+      const requiredArrays = ['missionDrafts', 'improvementProposals', 'approvalRequests', 'evidenceLedger', 'findingsLedger', 'retestLedger', 'hypothesisLedger', 'workOrderLedger', 'watchCycleLedger', 'memoryCapsule', 'memoryProposals'];
-+      if (!isValidHostedStateSnapshot(state, requiredArrays)) {
-+        throw new Error('Hosted state snapshot schema is invalid');
-+      }
-+    }
-     replaceMapContents(missionDrafts, state.missionDrafts);
-     replaceMapContents(improvementProposals, state.improvementProposals);
-     replaceMapContents(approvalRequests, state.approvalRequests);
-@@ -1207,6 +1246,7 @@ async function loadPersistedState(): Promise<void> {
-     console.log(`[T3MP3ST] State restored from ${file}`);
-   } catch (error: any) {
-     if (error?.code !== 'ENOENT') {
-+      if (hostedMode()) throw new Error('Hosted state restore failed; refusing to start with empty state');
-       console.warn(`[T3MP3ST] State restore skipped: ${error.message || error}`);
-     }
-   }
-@@ -4816,6 +4856,7 @@ function emitContractEvent(type: string, payload: Record<string, unknown>): void
-     ...payload,
-   });
-   void appendStateEvent(type, payload).catch(error => {
-+    markHostedPersistenceFailure();
-     console.warn(`[T3MP3ST] Event persistence failed: ${error.message || error}`);
-   });
-   schedulePersist(type);
-@@ -4827,6 +4868,7 @@ function emitContractEvent(type: string, payload: Record<string, unknown>): void
- 
- /** Connected SSE clients */
- const sseClients: Set<Response> = new Set();
-+let httpServer: ReturnType<typeof app.listen> | null = null;
- 
- /** Broadcast an event to all connected SSE clients */
- export function broadcastEvent(event: string, data: Record<string, unknown>): void {
-@@ -4897,11 +4939,21 @@ app.get('/api/events', (_req: Request, res: Response) => {
- // API ENDPOINTS - HEALTH & STATUS
- // =============================================================================
- 
--app.get(['/health', '/api/health'], (_req: Request, res: Response) => {
--  res.json({
-+app.get('/api/runtime/status', async (_req: Request, res: Response): Promise<void> => {
-+  if (!hostedMode()) { res.json({ enabled: false, ready: true, readOnly: false }); return; }
-+  const status = await readHostedRuntimeStatus();
-+  if (!status) { res.status(503).json({ error: 'Hosted runtime status is unavailable' }); return; }
-+  res.status(hostedRuntimeReady(status) && !hasHostedPersistenceFailure() ? 200 : 503).json(publicHostedRuntimeStatus(status));
-+});
-+
-+app.get(['/health', '/api/health'], async (_req: Request, res: Response): Promise<void> => {
-+  const runtime = hostedMode() ? await readHostedRuntimeStatus() : null;
-+  const durableReady = !hostedMode() || (hostedRuntimeReady(runtime) && !hasHostedPersistenceFailure());
-+  res.status(durableReady ? 200 : 503).json({
-     ...healthPayload(),
-     payload_db_size: Object.values(PAYLOAD_DB).reduce((sum, cat) =>
-       sum + Object.values(cat).reduce((s, arr) => s + arr.length, 0), 0),
-+    ...(hostedMode() ? { runtime: runtime ? publicHostedRuntimeStatus(runtime) : { ready: false, readOnly: true } } : {}),
-   });
- });
- 
-@@ -5946,8 +5998,11 @@ app.patch('/api/mission-drafts/:id', (req: Request, res: Response) => {
- });
- 
- app.delete('/api/mission-drafts/:id', (req: Request, res: Response) => {
--  const deleted = missionDrafts.delete(req.params.id);
--  res.json({ success: deleted });
-+  const draft = missionDrafts.get(req.params.id);
-+  if (!draft) { res.status(404).json({ error: 'Mission draft not found' }); return; }
-+  missionDrafts.delete(req.params.id);
-+  emitContractEvent('draft.deleted', { draftId: req.params.id });
-+  res.json({ success: true });
- });
- 
- app.post('/api/route-preview', (req: Request, res: Response) => {
-@@ -6214,6 +6269,11 @@ app.get('/api/selfimprove/ledger', async (_req: Request, res: Response): Promise
- });
- 
- app.get('/api/llm/status', (_req: Request, res: Response) => {
-+  if (hostedMode()) {
-+    const llmConfig = config.getLLMConfig('openai');
-+    res.json({ connected: !!llm, provider: 'openai', model: llmConfig.model, hasApiKey: !!llmConfig.apiKey, configured: Boolean(llmConfig.apiKey) });
-+    return;
-+  }
-   const llmConfig = config.getLLMConfig();
-   res.json({
-     connected: !!llm,
-@@ -6230,7 +6290,31 @@ app.get('/api/llm/status', (_req: Request, res: Response) => {
- // and it stays on localhost). Body values override server config; missing → server config. Runs
- // server-side so the browser dodges provider CORS, and fails open to the static AVAILABLE_MODELS list
- // (source:'static') so a missing key / network error never leaves the panel empty.
-+async function respondWithHostedModels(res: Response): Promise<void> {
-+  try {
-+    const cfg = config.getLLMConfig('openai');
-+    const baseUrl = cfg.baseUrl || HOSTED_OPENAI_BASE_URL;
-+    if (baseUrl !== HOSTED_OPENAI_BASE_URL) {
-+      res.status(503).json({ error: 'Hosted OpenAI endpoint is not configured safely' });
-+      return;
-+    }
-+    const models = await listProviderModels('openai', { baseUrl, apiKey: cfg.apiKey, timeoutMs: 8000 });
-+    res.json({ provider: 'openai', source: 'live', models });
-+  } catch {
-+    res.status(502).json({ error: 'OpenAI model list is unavailable' });
-+  }
-+}
-+
-+app.get('/api/models', async (_req: Request, res: Response): Promise<void> => {
-+  if (!hostedMode()) { res.status(404).json({ error: 'Not found' }); return; }
-+  await respondWithHostedModels(res);
-+});
-+
- app.post('/api/models', async (req: Request, res: Response): Promise<void> => {
-+  if (hostedMode()) {
-+    await respondWithHostedModels(res);
-+    return;
-+  }
-   const body = (req.body ?? {}) as { provider?: string; apiKey?: string; baseUrl?: string };
-   const defaultProvider = config.getLLMConfig().provider;
-   const requestedProvider = (typeof body.provider === 'string' && body.provider.trim()) || defaultProvider;
-@@ -6263,7 +6347,13 @@ app.post('/api/tools/execute', async (req: Request, res: Response): Promise<void
-   if (!command) { res.status(400).json({ error: 'Command required' }); return; }
-   const parsed = parseCommand(command);
-   if ('error' in parsed) { res.status(400).json({ error: parsed.error }); return; }
--  const targetResolution = resolveCommandExecutionTarget(body, parsed);
-+  if (hostedMode() && !hostedSafeCommand(parsed.bin, parsed.args)) {
-+    res.status(403).json({ error: 'Hosted mode permits only local tool version checks; use /api/tools/recon for scoped network work' });
-+    return;
-+  }
-+  const targetResolution = hostedMode() && hostedSafeCommand(parsed.bin, parsed.args)
-+    ? { target: 'local-host' }
-+    : resolveCommandExecutionTarget(body, parsed);
-   if ('error' in targetResolution) { res.status(400).json({ error: targetResolution.error }); return; }
-   const guard = guardAction(body, 'command_execution', targetResolution.target, `Run ${parsed.bin} against ${targetResolution.target}`);
-   if (!guard.allowed) { blockForApproval(res, guard); return; }
-@@ -6367,13 +6457,41 @@ app.get('/api/tools', (_req: Request, res: Response) => {  res.json({
- app.post('/api/llm/chat', async (req: Request, res: Response): Promise<void> => {
-   // Caller-supplied systemPrompt is a local-operator convenience (the UI uses it);
-   // safe here because the cross-origin CSRF guard above blocks foreign-webpage drive-by.
--  const { message, systemPrompt } = req.body;
--  if (!message) { res.status(400).json({ error: 'Message required' }); return; }
-+  const body = (req.body || {}) as Record<string, unknown>;
-+  const { message, systemPrompt } = body;
-+  if (typeof message !== 'string' || !message.trim() || message.length > 12_000) { res.status(400).json({ error: 'Message must be a non-empty string of at most 12000 characters' }); return; }
-+  if (systemPrompt !== undefined && (typeof systemPrompt !== 'string' || systemPrompt.length > 2_000)) { res.status(400).json({ error: 'systemPrompt must be a string of at most 2000 characters' }); return; }
-   if (!llm) { res.status(503).json({ error: 'LLM not configured' }); return; }
-+  const rawMaxTokens = body.maxTokens;
-+  if (rawMaxTokens !== undefined && (typeof rawMaxTokens !== 'number' || !Number.isInteger(rawMaxTokens) || rawMaxTokens < 1 || rawMaxTokens > 1024)) {
-+    res.status(400).json({ error: 'maxTokens must be an integer between 1 and 1024' }); return;
-+  }
-+  const maxTokens = typeof rawMaxTokens === 'number' ? rawMaxTokens : 512;
-+  const controller = new AbortController();
-+  res.on('close', () => { if (!res.writableEnded) controller.abort(); });
-   try {
--    const response = await llm.prompt(message, systemPrompt);
-+    const response = await llm.prompt(message, systemPrompt, {
-+      maxTokens: body.smoke === true ? 32 : Math.min(maxTokens, 1024),
-+      signal: controller.signal,
-+    });
-     res.json({ success: true, response });
--  } catch { res.status(500).json({ error: 'LLM request failed' }); }
-+  } catch (error) {
-+    if (res.headersSent || res.destroyed) return;
-+    const status = Number((error as { status?: number })?.status);
-+    const safeIdentifier = (value: unknown): string | undefined =>
-+      typeof value === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(value) ? value : undefined;
-+    const diagnostics = Number.isInteger(status) && status > 0 ? {
-+      upstreamStatus: status,
-+      ...(safeIdentifier((error as { upstreamCode?: unknown })?.upstreamCode) ? { upstreamCode: safeIdentifier((error as { upstreamCode?: unknown }).upstreamCode) } : {}),
-+      ...(safeIdentifier((error as { upstreamParam?: unknown })?.upstreamParam) ? { upstreamParam: safeIdentifier((error as { upstreamParam?: unknown }).upstreamParam) } : {}),
-+    } : {};
-+    const timedOut = controller.signal.aborted || /timeout|timed?\s*out|abort/i.test((error as Error)?.message || '');
-+    if (timedOut) res.status(504).json({ error: 'LLM request timed out' });
-+    else if (status === 429) res.status(429).json({ error: 'OpenAI rate limit exceeded', ...diagnostics });
-+    else if (status === 401 || status === 403) res.status(502).json({ error: 'OpenAI rejected the configured server credential', ...diagnostics });
-+    else if (status >= 500) res.status(502).json({ error: 'OpenAI service is unavailable', ...diagnostics });
-+    else res.status(502).json({ error: 'LLM request failed', ...diagnostics });
-+  }
- });
- 
- // =============================================================================
-@@ -6994,8 +7112,10 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
-   temperature: number;
-   timeout: number;
- } {
-+  if (hostedMode() && provider && provider !== 'openai') throw new Error('Hosted API supports only OpenAI');
-+  if (hostedMode() && baseUrl && baseUrl !== HOSTED_OPENAI_BASE_URL) throw new Error('Hosted API supports only the canonical OpenAI endpoint');
-   const defaultConfig = config.getLLMConfig();
--  const selectedProvider = provider || defaultConfig.provider;
-+  const selectedProvider = hostedMode() ? 'openai' : (provider || defaultConfig.provider);
-   // Local-agent backends use their own CLI login and need no T3MP3ST API key.
-   if (selectedProvider === 'local-agent') {
-     return {
-@@ -7009,6 +7129,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
-     };
-   }
-   const baseConfig = config.getLLMConfig(selectedProvider as any, model);
-+  if (hostedMode() && baseConfig.baseUrl && baseConfig.baseUrl !== HOSTED_OPENAI_BASE_URL) throw new Error('Hosted OpenAI endpoint is not configured safely');
-   // A per-request base URL is honored ONLY for the local provider (the operator's own
-   // llama.cpp / Ollama host). For any cloud provider it is ignored — never let a request
-   // redirect a cloud call. A malformed/non-HTTP URL throws (callers already 400 on throw).
-@@ -7035,9 +7156,9 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
-     // Only override the configured URL for a local provider. Cloud providers keep
-     // their own provider URL and cannot be redirected by a request.
-     ...(selectedProvider === 'local' && localBaseUrl ? { baseUrl: localBaseUrl } : {}),
--    maxTokens: 8192,
-+    maxTokens: hostedMode() ? 1024 : 8192,
-     temperature: 0.4,
--    timeout: readGeneralTimeoutEnv() ?? 300000, // General planning needs room (was a hardcoded 60s); override via env
-+    timeout: hostedMode() ? 30_000 : (readGeneralTimeoutEnv() ?? 300000), // hosted calls have a fixed total cap
-   };
- }
- 
-@@ -8208,13 +8329,25 @@ async function startServer() {
-   const flushAndExit = (signal: NodeJS.Signals): void => {
-     if (shuttingDown) return;
-     shuttingDown = true;
--    console.log(`[T3MP3ST] ${signal} received — flushing state, shutting down…`);
--    void flushPersist().catch(() => { /* best-effort */ }).finally(() => process.exit(0));
-+    console.log(`[T3MP3ST] ${signal} received — stopping intake and draining state…`);
-+    const closed = httpServer
-+      ? new Promise<void>(resolve => httpServer?.close(() => resolve()))
-+      : Promise.resolve();
-+    if (activeGeneral) activeGeneral.stopMonitoring();
-+    getTempestCommand()?.stop();
-+    for (const client of sseClients) client.end();
-+    void closed
-+      .then(() => flushPersist())
-+      .then(() => process.exit(0))
-+      .catch(error => {
-+        console.error('[T3MP3ST] State flush failed during shutdown:', error instanceof Error ? error.message : 'unknown error');
-+        process.exit(1);
-+      });
-   };
-   process.once('SIGTERM', flushAndExit);
-   process.once('SIGINT', flushAndExit);
- 
--  app.listen(Number(PORT), HOST, () => {
-+  httpServer = app.listen(Number(PORT), HOST, () => {
-     console.log(`[T3MP3ST] Server running at http://${HOST}:${PORT}`);
-     console.log(`[T3MP3ST] Web UI available at http://${HOST}:${PORT}/ui`);
-     if (!HOST_IS_LOOPBACK) {
-@@ -8273,4 +8406,7 @@ async function startServer() {
-   });
- }
- 
--startServer().catch(console.error);
-+startServer().catch(error => {
-+  console.error('[T3MP3ST] Server startup failed:', error instanceof Error ? error.message : 'unknown error');
-+  process.exitCode = 1;
-+});

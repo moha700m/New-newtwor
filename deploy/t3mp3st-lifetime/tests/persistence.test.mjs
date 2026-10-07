@@ -548,6 +548,30 @@ test('higher epoch takes the lease by CAS and fences a stale writer', async t =>
   assert.equal(after.revision, takeover.revision);
 });
 
+test('existing-head claim conflict refreshes ownership evidence without overwriting the winner', async t => {
+  const store = new MemoryBlobStore();
+  const original = await fixture({ store, epoch: 1, ownerId: 'original' });
+  const candidate = await fixture({ store, epoch: 2, ownerId: 'candidate' });
+  const winner = await fixture({ store, epoch: 3, ownerId: 'winner' });
+  t.after(async () => {
+    for (const item of [original, candidate, winner]) await rm(item.root, { recursive: true, force: true });
+  });
+  await seedLocalFiles(original);
+  await restoredAndClaimed(original);
+  await candidate.manager.restore();
+  await winner.manager.restore();
+  assert.equal(await winner.manager.claim(), true);
+  const head = await readManifest(store);
+  assert.equal(await candidate.manager.claim(), false);
+  assert.equal(candidate.manager.readOnly, true);
+  assert.equal(candidate.manager.revision, head.revision);
+  assert.deepEqual(candidate.manager.claimStatus, {
+    category: 'writer_conflict', attemptedEpoch: 2, currentEpoch: 3,
+    revision: head.revision, ownerMatches: false,
+  });
+  assert.deepEqual(await readManifest(store), head);
+});
+
 test('overlapping syncs serialize and a write during upload is published on the next pass', async t => {
   const item = await fixture();
   t.after(() => rm(item.root, { recursive: true, force: true }));
@@ -830,7 +854,7 @@ test('a failed post-spawn status write fails closed and still stops, flushes, an
   const fetchImpl = async (url, options = {}) => {
     if (url === 'https://api.openai.com/v1/models') return new Response(JSON.stringify({ data: [{ id: 'gpt-6.1-sol' }] }));
     if (url.startsWith('https://private.blob.test/')) return new Response(null, { status: 403 });
-    if (url.endsWith('/api/health')) {
+    if (url.endsWith('/api/llm/status')) {
       await rm(statusPath, { force: true });
       await mkdir(statusPath);
       return new Response('ok', { status: 200 });
@@ -924,7 +948,7 @@ test('a transient background status write failure remains a failed shutdown afte
     blobSdk: fakeBlobSdk(new Map()),
     fetchImpl: async url => {
       if (url.startsWith('https://private.blob.test/')) return new Response(null, { status: 403 });
-      if (url.endsWith('/api/health')) {
+      if (url.endsWith('/api/llm/status')) {
         readySeen = true;
         return new Response('ok', { status: 200 });
       }

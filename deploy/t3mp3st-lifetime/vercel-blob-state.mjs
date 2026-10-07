@@ -72,7 +72,7 @@ export async function performLlmSmoke({ port, status, fetchImpl = fetch }) {
       body: JSON.stringify({
         message: 'Reply with exactly: T3MP3ST_OK',
         systemPrompt: 'Return only the requested marker.',
-        maxTokens: 32,
+        maxTokens: 1024,
         tools: [],
       }),
       signal: AbortSignal.timeout(30_000),
@@ -382,7 +382,7 @@ export async function runSupervisor({ environment = process.env, fetchImpl = fet
     legacyTimer.unref();
 
     try {
-      const healthPath = persistence.readOnly ? '/api/llm/status' : '/api/health';
+      const healthPath = '/api/llm/status';
       const healthStatus = await waitForHttpReady({
         url: `http://127.0.0.1:${port}${healthPath}`,
         fetchImpl,

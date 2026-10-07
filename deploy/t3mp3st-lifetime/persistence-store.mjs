@@ -262,6 +262,7 @@ export class SnapshotPersistence {
       legacyUnchanged: this.legacyUnchanged,
       legacyDigests: this.legacyDigests,
       lastSyncAt: this.lastSyncAt,
+      claim: this.claimStatus ?? null,
     });
   }
 
@@ -433,6 +434,7 @@ export class SnapshotPersistence {
       const expired = Date.parse(this.manifest.writer.leaseExpiresAt) + SAME_EPOCH_TAKEOVER_GRACE_MS <= this.now();
       if (!ownerMatches && (this.epoch < currentEpoch || (this.epoch === currentEpoch && !expired))) {
         this.readOnly = true;
+        this.claimStatus = { category: this.epoch < currentEpoch ? 'older_epoch' : 'lease_active', attemptedEpoch: this.epoch, currentEpoch, revision: this.manifest.revision, ownerMatches };
         this.reportStatus();
         return false;
       }
@@ -442,6 +444,20 @@ export class SnapshotPersistence {
       return this.leaseAcquired;
     } catch (error) {
       if (error?.category !== 'writer_fenced') throw error;
+      // A failed CAS never proves ownership: refresh even an existing head for accurate diagnostics.
+      const previousEtag = this.manifestEtag;
+      const fresh = await this.readHead();
+      if (fresh && this.manifest) {
+        this.manifest = fresh.manifest;
+        this.manifestEtag = fresh.etag;
+      }
+      this.claimStatus = {
+        category: fresh?.etag === previousEtag ? 'conditional_write_rejected' : 'writer_conflict',
+        attemptedEpoch: this.epoch,
+        currentEpoch: fresh?.manifest.writer.epoch ?? null,
+        revision: fresh?.manifest.revision ?? null,
+        ownerMatches: fresh?.manifest.writer.owner === this.ownerId,
+      };
       // A first-head race can only be resolved by a fresh read and a fenced decision.
       if (!this.manifest) {
         const raced = await this.readHead();

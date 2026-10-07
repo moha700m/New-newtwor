@@ -31,6 +31,7 @@ jobs:
       - name: Verify image user and container vulnerability report
         run: |
           test "$(docker inspect t3mp3st-audit --format '{{.Config.User}}')" = node
+          docker image inspect t3mp3st-audit --format 'container.image size_bytes={{.Size}} user={{.Config.User}}'
           docker run --rm --entrypoint node t3mp3st-audit /opt/runtime/check-container-audit.mjs
       - name: Scan current files with the verified Gitleaks binary
         run: docker run --rm -v "$PWD:/scan:ro" --entrypoint gitleaks t3mp3st-audit dir --redact=100 --no-banner /scan
