@@ -1,0 +1,40 @@
+{
+  "gitleaks": {
+    "version": "8.30.1",
+    "sourceCommit": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+    "go": "1.26.8",
+    "binarySha256": "fabce7f972b48a61b65a574826225d199aacfcece0e1d07ad16ea384981480ba",
+    "packageCount": 379,
+    "deprecatedOpenpgpImports": [],
+    "packageVulnerabilityScan": "0 affected packages; 1 module-wide deprecated-openpgp advisory",
+    "compressFixed": "1.18.7",
+    "fullUpstreamTests": "passed"
+  },
+  "trivy": {
+    "version": "0.75.0",
+    "sourceCommit": "591e9799316a602e703f0b484f6c6d7b234ec8f3",
+    "go": "1.27.1",
+    "packageCount": 3147,
+    "deprecatedOpenpgpImports": [],
+    "archiveSha256": "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f",
+    "packageVulnerabilityScan": "0 affected packages; 1 module-wide deprecated-openpgp advisory"
+  },
+  "remainingAdvisoryReview": {
+    "GO-2026-5932": {
+      "severity": "UNKNOWN",
+      "fixAvailable": false,
+      "disposition": "Module present, affected OpenPGP package paths absent from both pinned executable source dependency graphs. No advisory suppression."
+    },
+    "GO-2026-4919": {
+      "aliases": [
+        "CVE-2026-33634",
+        "GHSA-69fq-xp46-6x23"
+      ],
+      "disposition": "Go database broad range overmatches. Primary maintainer advisory scopes the malicious Go release to =0.69.4; installed checksum-pinned 0.75.0 is outside this version and exposure window.",
+      "primaryAdvisory": "https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23"
+    }
+  },
+  "govulncheck": "1.8.0",
+  "finalImageAudit": "See staged container build evidence and PRODUCTION-AUDIT.md; no security gate relaxed.",
+  "binaryScannerCaveat": "Govulncheck binary scans report OpenPGP package wildcards despite those imports being absent from the pinned source package graphs. Both source package scans pass. Remaining module-level findings are retained and reviewed, not suppressed."
+}

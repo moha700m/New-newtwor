@@ -10,7 +10,7 @@ only inside Vercel. See `DEPENDENCY-SECURITY.md` for dependency changes.
 ## Build and verification
 
 The Dockerfile pins the Node/Alpine image by digest, pins direct OS packages,
-and verifies the official Gitleaks and Trivy downloads by SHA-256. It installs
+and verifies the official Trivy and Go compiler downloads by SHA-256. Gitleaks is rebuilt from its pinned upstream release with patched modules and a checksum-verified compiler (see `gitleaks/BUILD.md`). The final runtime omits npm, Corepack, and Yarn. It installs
 dependencies with `npm ci --ignore-scripts`, checks types/lint/build/audit, runs
 supervisor tests, and excludes development dependencies from the runtime image.
 Trivy scans the final filesystem, including OS and language dependencies;

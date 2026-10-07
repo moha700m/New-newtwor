@@ -9,5 +9,8 @@ const findings = (report.Results || []).flatMap(result => (result.Vulnerabilitie
   installed: v.InstalledVersion, fixed: v.FixedVersion || null, severity: v.Severity,
 })));
 const blocking = findings.filter(v => ['HIGH', 'CRITICAL'].includes(v.severity) && v.fixed);
-console.log(JSON.stringify({ event: 'container.audit', count: findings.length, blocking: blocking.length, findings }));
+for (const finding of findings) {
+  console.log(JSON.stringify({ event: 'container.audit.finding', ...finding, blocking: blocking.includes(finding) }));
+}
+console.log(JSON.stringify({ event: 'container.audit.summary', count: findings.length, blocking: blocking.length }));
 if (blocking.length) process.exit(1);

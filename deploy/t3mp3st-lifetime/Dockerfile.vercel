@@ -7,13 +7,17 @@ RUN node /opt/runtime/prepare.mjs /app
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci --ignore-scripts --no-fund && npm run typecheck && npm run lint && npm run build && npm audit --audit-level=low
 RUN node --test /opt/runtime/tests/*.test.mjs && npm prune --omit=dev --ignore-scripts --no-audit --no-fund
-RUN node /opt/runtime/install-tools.mjs /opt/binaries
+RUN node /opt/runtime/install-tools.mjs /opt/binaries && \
+    node /opt/runtime/build-gitleaks.mjs /opt/binaries/gitleaks
 
 FROM node:22.23.3-alpine3.24@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
 RUN apk upgrade --no-cache && apk add --no-cache \
     bash=5.3.9-r1 curl=8.22.0-r0 git=2.54.0-r0 openssl=3.5.9-r0 \
     ca-certificates=20260909-r0 file=5.47-r2 bind-tools=9.20.29-r0 \
     nmap=7.99-r0 whois=5.6.6-r0 binutils=2.45.1-r1 exiftool=13.55-r0 yara=4.5.7-r0
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* && \
+    rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm /usr/local/bin/pnpx
 WORKDIR /app
 COPY --from=build /app/dist /app/dist
 COPY --from=build /app/docs /app/docs
@@ -21,7 +25,8 @@ COPY --from=build /app/scripts /app/scripts
 COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/package.json /app/package-lock.json /app/LICENSE /app/release.json /app/
 COPY --from=build /opt/runtime /opt/runtime
-COPY --from=build /opt/binaries/trivy /opt/binaries/gitleaks /usr/local/bin/
+COPY --from=build /opt/binaries/trivy /usr/local/bin/trivy
+COPY --from=build /opt/binaries/gitleaks /usr/local/bin/gitleaks
 RUN ln -s /app/node_modules /opt/runtime/node_modules && \
     mkdir -p /tmp/t3mp3st-state /tmp/t3mp3st-config /tmp/t3mp3st-workspace /home/node/.config && \
     chown -R node:node /tmp/t3mp3st-state /tmp/t3mp3st-config /tmp/t3mp3st-workspace /home/node/.config && \
