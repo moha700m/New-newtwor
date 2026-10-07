@@ -1,0 +1,35 @@
+name: T3MP3ST production checks
+on:
+  push:
+    branches: [web-tools-runtime]
+    paths: ['deploy/t3mp3st-lifetime/**', '!deploy/t3mp3st-lifetime/*.md', '.github/workflows/t3mp3st-production-checks.yml']
+  pull_request:
+    paths: ['deploy/t3mp3st-lifetime/**', '!deploy/t3mp3st-lifetime/*.md', '.github/workflows/t3mp3st-production-checks.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.3'
+      - name: Scan repository for secrets without displaying matches
+        run: python3 deploy/t3mp3st-lifetime/scan-secrets.py .
+      - name: Check pinned source, clean install, build, and tests
+        run: |
+          git clone https://github.com/elder-plinius/T3MP3ST.git /tmp/t3mp3st-source
+          git -C /tmp/t3mp3st-source checkout 29824d5625ede419ac8cdae418c8f4c72c6270f7
+          sh deploy/t3mp3st-lifetime/verify.sh /tmp/t3mp3st-source
+      - name: Build production image
+        run: docker build -f deploy/t3mp3st-lifetime/Dockerfile.vercel -t t3mp3st-audit deploy/t3mp3st-lifetime
+      - name: Verify image user and container vulnerability report
+        run: |
+          test "$(docker inspect t3mp3st-audit --format '{{.Config.User}}')" = node
+          docker run --rm --entrypoint node t3mp3st-audit /opt/runtime/check-container-audit.mjs
+      - name: Scan current files with the verified Gitleaks binary
+        run: docker run --rm -v "$PWD:/scan:ro" --entrypoint gitleaks t3mp3st-audit dir --redact=100 --no-banner /scan

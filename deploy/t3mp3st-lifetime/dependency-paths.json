@@ -1,0 +1,211 @@
+[
+  {
+    "name": "@modelcontextprotocol/sdk",
+    "version": "1.31.0",
+    "location": "node_modules/@modelcontextprotocol/sdk",
+    "dev": false,
+    "dependencyChains": [
+      "@ > @modelcontextprotocol/sdk@1.31.0"
+    ]
+  },
+  {
+    "name": "@vitest/coverage-v8",
+    "version": "4.1.11",
+    "location": "node_modules/@vitest/coverage-v8",
+    "dev": true,
+    "dependencyChains": [
+      "@ > @vitest/coverage-v8@4.1.11",
+      "@ > vitest@4.1.11 > @vitest/coverage-v8@4.1.11",
+      "@vitest/coverage-v8@4.1.11 > cycle > vitest@4.1.11 > @vitest/coverage-v8@4.1.11"
+    ]
+  },
+  {
+    "name": "@vitest/mocker",
+    "version": "4.1.11",
+    "location": "node_modules/@vitest/mocker",
+    "dev": true,
+    "dependencyChains": [
+      "@ > vitest@4.1.11 > @vitest/mocker@4.1.11",
+      "@vitest/coverage-v8@4.1.11 > vitest@4.1.11 > @vitest/mocker@4.1.11"
+    ]
+  },
+  {
+    "name": "brace-expansion",
+    "version": "1.1.21",
+    "location": "node_modules/brace-expansion",
+    "dev": true,
+    "dependencyChains": [
+      "@ > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "@ > typescript-eslint@8.51.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "eslint@9.39.2 > cycle > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/config-array@0.21.1 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "eslint@9.39.2 > cycle > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > minimatch@3.1.5 > brace-expansion@1.1.21",
+      "eslint@9.39.2 > cycle > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > minimatch@3.1.5 > brace-expansion@1.1.21"
+    ]
+  },
+  {
+    "name": "brace-expansion",
+    "version": "2.1.7",
+    "location": "node_modules/@typescript-eslint/typescript-estree/node_modules/brace-expansion",
+    "dev": true,
+    "dependencyChains": [
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/parser@8.51.0 > @typescript-eslint/typescript-estree@8.51.0 > minimatch@9.0.9 > brace-expansion@2.1.7",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/typescript-estree@8.51.0 > minimatch@9.0.9 > brace-expansion@2.1.7",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > @typescript-eslint/typescript-estree@8.51.0 > minimatch@9.0.9 > brace-expansion@2.1.7",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > @typescript-eslint/typescript-estree@8.51.0 > minimatch@9.0.9 > brace-expansion@2.1.7",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/parser@8.51.0 > @typescript-eslint/typescript-estree@8.51.0 > minimatch@9.0.9 > brace-expansion@2.1.7",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/typescript-estree@8.51.0 > minimatch@9.0.9 > brace-expansion@2.1.7",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > @typescript-eslint/typescript-estree@8.51.0 > minimatch@9.0.9 > brace-expansion@2.1.7"
+    ]
+  },
+  {
+    "name": "fast-uri",
+    "version": "3.1.8",
+    "location": "node_modules/fast-uri",
+    "dev": false,
+    "dependencyChains": [
+      "@ > @modelcontextprotocol/sdk@1.31.0 > ajv-formats@3.0.1 > ajv@8.20.0 > fast-uri@3.1.8",
+      "@ > @modelcontextprotocol/sdk@1.31.0 > ajv@8.20.0 > fast-uri@3.1.8",
+      "@ > ajv@8.20.0 > fast-uri@3.1.8",
+      "@ > conf@12.0.0 > ajv-formats@2.1.1 > ajv@8.20.0 > fast-uri@3.1.8",
+      "@ > conf@12.0.0 > ajv@8.20.0 > fast-uri@3.1.8"
+    ]
+  },
+  {
+    "name": "figlet",
+    "version": "1.11.3",
+    "location": "node_modules/figlet",
+    "dev": false,
+    "dependencyChains": [
+      "@ > figlet@1.11.3"
+    ]
+  },
+  {
+    "name": "hono",
+    "version": "4.13.13",
+    "location": "node_modules/hono",
+    "dev": false,
+    "dependencyChains": [
+      "@ > @modelcontextprotocol/sdk@1.31.0 > @hono/node-server@2.0.12 > hono@4.13.13",
+      "@ > @modelcontextprotocol/sdk@1.31.0 > hono@4.13.13"
+    ]
+  },
+  {
+    "name": "ip-address",
+    "version": "10.7.3",
+    "location": "node_modules/ip-address",
+    "dev": false,
+    "dependencyChains": [
+      "@ > @modelcontextprotocol/sdk@1.31.0 > express-rate-limit@8.5.2 > ip-address@10.7.3",
+      "@ > socks@2.8.9 > ip-address@10.7.3"
+    ]
+  },
+  {
+    "name": "js-yaml",
+    "version": "4.3.2",
+    "location": "node_modules/js-yaml",
+    "dev": true,
+    "dependencyChains": [
+      "@ > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/type-utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/eslint-plugin@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/parser@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > @typescript-eslint/utils@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "@ > typescript-eslint@8.51.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2",
+      "eslint@9.39.2 > cycle > @eslint-community/eslint-utils@4.9.0 > eslint@9.39.2 > @eslint/eslintrc@3.3.3 > js-yaml@4.3.2"
+    ]
+  },
+  {
+    "name": "proxy-addr",
+    "version": "2.0.8",
+    "location": "node_modules/proxy-addr",
+    "dev": false,
+    "dependencyChains": [
+      "@ > @modelcontextprotocol/sdk@1.31.0 > express-rate-limit@8.5.2 > express@4.22.2 > proxy-addr@2.0.8",
+      "@ > @modelcontextprotocol/sdk@1.31.0 > express@5.2.1 > proxy-addr@2.0.8",
+      "@ > express@4.22.2 > proxy-addr@2.0.8"
+    ]
+  },
+  {
+    "name": "source-map-js",
+    "version": "1.2.2",
+    "location": "node_modules/source-map-js",
+    "dev": true,
+    "dependencyChains": [
+      "@ > @vitest/coverage-v8@4.1.11 > magicast@0.5.3 > source-map-js@1.2.2",
+      "@ > vitest@4.1.11 > @vitest/coverage-v8@4.1.11 > magicast@0.5.3 > source-map-js@1.2.2",
+      "@ > vitest@4.1.11 > @vitest/mocker@4.1.11 > vite@8.1.2 > postcss@8.5.25 > source-map-js@1.2.2",
+      "@ > vitest@4.1.11 > vite@8.1.2 > postcss@8.5.25 > source-map-js@1.2.2",
+      "@vitest/coverage-v8@4.1.11 > cycle > vitest@4.1.11 > @vitest/coverage-v8@4.1.11 > magicast@0.5.3 > source-map-js@1.2.2",
+      "@vitest/coverage-v8@4.1.11 > vitest@4.1.11 > @vitest/mocker@4.1.11 > vite@8.1.2 > postcss@8.5.25 > source-map-js@1.2.2",
+      "@vitest/coverage-v8@4.1.11 > vitest@4.1.11 > vite@8.1.2 > postcss@8.5.25 > source-map-js@1.2.2"
+    ]
+  },
+  {
+    "name": "undici",
+    "version": "8.10.2",
+    "location": "node_modules/undici",
+    "dev": false,
+    "dependencyChains": [
+      "@ > undici@8.10.2"
+    ]
+  },
+  {
+    "name": "undici",
+    "version": "6.29.0",
+    "location": "node_modules/@vercel/blob/node_modules/undici",
+    "dev": false,
+    "dependencyChains": [
+      "@ > @vercel/blob@2.6.1 > undici@6.29.0"
+    ]
+  },
+  {
+    "name": "vitest",
+    "version": "4.1.11",
+    "location": "node_modules/vitest",
+    "dev": true,
+    "dependencyChains": [
+      "@ > vitest@4.1.11",
+      "@vitest/coverage-v8@4.1.11 > vitest@4.1.11"
+    ]
+  }
+]

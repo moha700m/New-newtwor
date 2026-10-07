@@ -1,0 +1,10 @@
+{
+  "release": "2026-10-07-production-audit",
+  "upstreamCommit": "29824d5625ede419ac8cdae418c8f4c72c6270f7",
+  "sourceRepository": "moha700m/New-newtwor",
+  "sourceBranch": "web-tools-runtime",
+  "nodeImage": "node:22.23.3-alpine3.24@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402",
+  "storageSchema": "t3mp3st_blob_state/v2",
+  "preferredModel": "gpt-6.1-sol",
+  "hostedPolicy": true
+}

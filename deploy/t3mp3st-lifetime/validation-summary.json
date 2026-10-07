@@ -1,0 +1,52 @@
+{
+  "upstreamCommit": "29824d5625ede419ac8cdae418c8f4c72c6270f7",
+  "node": "22.23.3",
+  "cleanInstall": {
+    "command": "npm ci --ignore-scripts --no-fund",
+    "passed": true
+  },
+  "typecheck": true,
+  "build": true,
+  "lint": {
+    "errors": 0,
+    "existingWarnings": 164
+  },
+  "upstreamTests": {
+    "files": 92,
+    "passed": 1003,
+    "opsPreflight": "passed",
+    "modelMatrix": "passed",
+    "frontierSelfTest": "19/19"
+  },
+  "runtimeTests": {
+    "passed": 32,
+    "skipped": 0,
+    "includesActualHTTP": true,
+    "signals": [
+      "SIGTERM",
+      "SIGINT"
+    ]
+  },
+  "npmAudit": {
+    "before": {
+      "moderate": 5,
+      "high": 7,
+      "critical": 1,
+      "total": 13
+    },
+    "after": {
+      "total": 0
+    }
+  },
+  "registryVerification": {
+    "signatures": 447,
+    "attestations": 74
+  },
+  "secretReview": {
+    "trackedFileScannerFindings": 0,
+    "gitleaksCurrentFilesFindings": 0,
+    "baselineHistoryCommits": 17,
+    "baselineHistoryFindings": 0
+  },
+  "containerBuildAndProductionVerification": "Performed by staged Vercel releases; see PRODUCTION-AUDIT.md for actual evidence."
+}
